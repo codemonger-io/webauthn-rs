@@ -765,6 +765,7 @@ impl TryFrom<(COSEAlgorithm, &Certificate)> for COSEKey {
             | COSEAlgorithm::PS384
             | COSEAlgorithm::PS512
             | COSEAlgorithm::EDDSA
+            | COSEAlgorithm::PinUvProtocol
             | COSEAlgorithm::INSECURE_RS1 => {
                 error!(
                     "unsupported X509 to COSE conversion for COSE algorithm type {:?}",
