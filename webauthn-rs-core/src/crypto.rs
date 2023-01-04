@@ -19,7 +19,6 @@ use ::rsa::{
     RsaPublicKey,
     pkcs1v15::{Signature as RsaSignature, VerifyingKey as RsaVerifyingKey},
 };
-use sha1::Sha1;
 use sha2::{Sha256, Digest as _};
 use x509_cert::{
     certificate::Certificate,
@@ -54,9 +53,6 @@ use crate::internals::{tpm_device_attribute_parser, TpmVendor};
 enum PublicKey {
     ES256(P256VerifyingKey),
     RS256(RsaVerifyingKey<Sha256>),
-    #[cfg(feature = "insecure-rs1")]
-    INSECURE_RS1(RsaVerifyingKey<Sha1>),
-    #[cfg(not(feature = "insecure-rs1"))]
     INSECURE_RS1(&'static str),
 }
 
@@ -86,16 +82,6 @@ impl TryFrom<(COSEAlgorithm, &Certificate)> for PublicKey {
                     .map(PublicKey::RS256)
             }
             COSEAlgorithm::INSECURE_RS1 => {
-                #[cfg(feature = "insecure-rs1")]
-                {
-                    RsaVerifyingKey::<Sha1>::try_from(pkey_info)
-                        .map_err(|e| {
-                            error!(?e, "RS1 public key from certificate");
-                            WebauthnError::TransientError("RS1 public key from certificate")
-                        })
-                        .map(PublicKey::INSECURE_RS1)
-                }
-                #[cfg(not(feature = "insecure-rs1"))]
                 Ok(PublicKey::INSECURE_RS1("INSECURE SHA1"))
             },
             _ => {
@@ -141,12 +127,6 @@ impl TryFrom<&COSEKey> for PublicKey {
                         Ok(PublicKey::RS256(pkey))
                     }
                     COSEAlgorithm::INSECURE_RS1 => {
-                        #[cfg(feature = "insecure-rs1")]
-                        {
-                            let pkey = RsaVerifyingKey::<Sha1>::new(pkey);
-                            Ok(PublicKey::INSECURE_RS1(pkey))
-                        }
-                        #[cfg(not(feature = "insecure-rs1"))]
                         Ok(PublicKey::INSECURE_RS1("INSECURE SHA1"))
                     }
                     // other RSA variants are not supported
@@ -199,24 +179,9 @@ fn pkey_verify_signature(
             let result = pkey.verify_digest(digest, &signature);
             Ok(result.is_ok())
         }
-        PublicKey::INSECURE_RS1(pkey) => {
-            #[cfg(feature = "insecure-rs1")]
-            {
-                let signature = RsaSignature::try_from(signature)
-                    .map_err(|e| {
-                        error!(?e, "RS1 signature decoding");
-                        WebauthnError::TransientError("RS1 signature decoding")
-                    })?;
-                let mut digest = Sha1::new();
-                digest.update(verification_data);
-                let result = pkey.verify_digest(digest, &signature);
-                Ok(result.is_ok())
-            }
-            #[cfg(not(feature = "insecure-rs1"))]
-            {
-                error!("{}", pkey);
-                Err(WebauthnError::CredentialInsecureCryptography)
-            }
+        PublicKey::INSECURE_RS1(_pkey) => {
+            error!("INSECURE SHA1 USAGE DETECTED");
+            Err(WebauthnError::CredentialInsecureCryptography)
         }
     }
 }
@@ -518,15 +483,13 @@ pub(crate) fn assert_packed_attest_req(pubk: &Certificate) -> Result<(), Webauth
 
 pub(crate) fn only_hash_from_type(
     alg: COSEAlgorithm,
-    input: &[u8],
+    _input: &[u8],
 ) -> Result<Vec<u8>, WebauthnError> {
     match alg {
         COSEAlgorithm::INSECURE_RS1 => {
             // sha1
             warn!("INSECURE SHA1 USAGE DETECTED");
-            let mut hasher = Sha1::new();
-            hasher.update(input);
-            Ok(hasher.finalize().to_vec())
+            Err(WebauthnError::CredentialInsecureCryptography)
         }
         c_alg => {
             debug!(?c_alg, "WebauthnError::COSEKeyInvalidType");
