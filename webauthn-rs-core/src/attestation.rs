@@ -572,7 +572,7 @@ pub(crate) fn verify_fidou2f_attestation(
                 .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
                 .and_then(|b| Certificate::from_der(b)
                     .map_err(|e| {
-                        error!(?e, "decoding certificate DER: {}", e);
+                        error!(?e, "decoding certificate DER: {e}");
                         WebauthnError::TransientError("decoding certificate DER")
                     }))
         })
@@ -925,7 +925,7 @@ pub(crate) fn verify_apple_anonymous_attestation(
                 .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
                 .and_then(|b| Certificate::from_der(b)
                     .map_err(|e| {
-                        error!("failed to decode Certificate DER: {}", e);
+                        error!("failed to decode Certificate DER: {e}");
                         WebauthnError::TransientError("failed to decode Certificate DER")
                     }))
         })
@@ -1014,7 +1014,7 @@ pub(crate) fn verify_android_key_attestation(
                     .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
                     .and_then(|b| Certificate::from_der(b)
                         .map_err(|e| {
-                            error!("failed to decode Certificate DER: {}", e);
+                            error!("failed to decode Certificate DER: {e}");
                             WebauthnError::TransientError("failed to decode Certificate DER")
                         }))
             })
@@ -1222,7 +1222,7 @@ pub(crate) fn verify_android_safetynet_attestation(
             Ok((certs, verified_claims))
         }(response_str)
         .map_err(|e| {
-            error!("jwt saftey-net error: {:?}", e);
+            error!("jwt saftey-net error: {e:?}");
             WebauthnError::AttestationStatementResponseInvalid
         })?;
 
@@ -1330,7 +1330,7 @@ pub fn verify_attestation_ca_chain<'a>(
     });
     let result = search.find_sync(std::sync::Arc::new(leaf))
         .map_err(|e| {
-            error!("failed to validate certificate path: {}", e);
+            error!("failed to validate certificate path: {e}");
             WebauthnError::TransientError("failed to validate certificate path")
         })?;
     let found = result

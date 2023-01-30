@@ -398,7 +398,7 @@ pub(crate) fn assert_packed_attest_req(pubk: &Certificate) -> Result<(), Webauth
     // https://w3c.github.io/webauthn/#sctn-packed-attestation-cert-requirements
     let der_bytes = pubk.to_der()
         .map_err(|e| {
-            error!("failed to encode certificate to DER: {}", e);
+            error!("failed to encode certificate to DER: {e}");
             WebauthnError::TransientError("failed to encode certificate to DER")
         })?;
     let x509_cert = x509_parser::parse_x509_certificate(&der_bytes)
@@ -731,8 +731,7 @@ impl TryFrom<(COSEAlgorithm, &Certificate)> for COSEKey {
             | COSEAlgorithm::PinUvProtocol
             | COSEAlgorithm::INSECURE_RS1 => {
                 error!(
-                    "unsupported X509 to COSE conversion for COSE algorithm type {:?}",
-                    alg
+                    "unsupported X509 to COSE conversion for COSE algorithm type {alg:?}"
                 );
                 Err(WebauthnError::COSEKeyInvalidType)
             }
