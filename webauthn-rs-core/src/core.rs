@@ -1180,6 +1180,11 @@ impl WebauthnCore {
             true
         }
     }
+
+    /// Returns the RP name
+    pub fn rp_name(&self) -> &str {
+        self.rp_name.as_str()
+    }
 }
 
 /*
@@ -1733,7 +1738,7 @@ mod tests {
             "rawId":"at-FfKGsOI21EhtCu7Vx-7t7FKkpUOyKXIkEBBD_vC-eym_AdW6Y9V8WyKxHmii11EBQEe7uFQ0bkYwb0GWmUQ",
             "extensions": {
                 "appid": true
-            }, 
+            },
             "response":{
                 "authenticatorData":"SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MBAAAAFA",
                 "clientDataJSON":"eyJjaGFsbGVuZ2UiOiJXZ1h6X2tUdjNXVVUxa3c4aG0tT0dvR1M0WkNIWF8zYkVxSEgyUHZWcDhNIiwiY2xpZW50RXh0ZW5zaW9ucyI6e30sImhhc2hBbGdvcml0aG0iOiJTSEEtMjU2Iiwib3JpZ2luIjoiaHR0cDovL2xvY2FsaG9zdDo4MDgwIiwidHlwZSI6IndlYmF1dGhuLmdldCJ9",
@@ -3587,7 +3592,7 @@ mod tests {
                 {
                 "type": "public-key",
                 "alg": -7
-                }              
+                }
             ],
             "authenticatorSelection": {
                 "authenticatorAttachment": "platform",
