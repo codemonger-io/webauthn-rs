@@ -208,6 +208,12 @@ impl WebauthnCore {
 
         let challenge = self.generate_challenge();
 
+        let resident_key = if require_resident_key {
+            Some(ResidentKeyRequirement::Required)
+        } else {
+            Some(ResidentKeyRequirement::Discouraged)
+        };
+
         let c = CreationChallengeResponse {
             public_key: PublicKeyCredentialCreationOptions {
                 rp: RelyingParty {
@@ -242,6 +248,7 @@ impl WebauthnCore {
                 }),
                 authenticator_selection: Some(AuthenticatorSelectionCriteria {
                     authenticator_attachment,
+                    resident_key,
                     require_resident_key,
                     user_verification: policy,
                 }),
