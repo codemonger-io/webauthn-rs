@@ -186,7 +186,8 @@ fn pkey_verify_signature(
     }
 }
 
-pub(crate) fn verify_signature(
+/// Validate an x509 signature is valid for the supplied data
+pub fn verify_signature(
     alg: COSEAlgorithm,
     cert: &Certificate,
     signature: &[u8],
@@ -230,10 +231,10 @@ where
     }
 }
 
-pub struct TpmSanData<'a> {
+struct TpmSanData<'a> {
     pub manufacturer: &'a str,
-    pub model: &'a str,
-    pub version: &'a str,
+    pub _model: &'a str,
+    pub _version: &'a str,
 }
 
 #[derive(Default)]
@@ -269,8 +270,8 @@ impl<'a> TpmSanDataBuilder<'a> {
             .zip(self.version)
             .map(|((manufacturer, model), version)| TpmSanData {
                 manufacturer,
-                model,
-                version,
+                _model: model,
+                _version: version,
             })
             .ok_or(WebauthnError::AttestationCertificateRequirementsNotMet)
     }
@@ -392,9 +393,11 @@ pub(crate) fn assert_tpm_attest_req(x509: &Certificate) -> Result<(), WebauthnEr
     Ok(())
 }
 
-pub(crate) fn assert_packed_attest_req(pubk: &Certificate) -> Result<(), WebauthnError> {
-    // Verify that attestnCert meets the requirements in § 8.2.1 Packed Attestation
-    // Statement Certificate Requirements.
+/// Verify that attestnCert meets the requirements in
+/// [§ 8.2.1 Packed Attestation Statement Certificate Requirements][0]
+///
+/// [0]: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
+pub fn assert_packed_attest_req(pubk: &Certificate) -> Result<(), WebauthnError> {
     // https://w3c.github.io/webauthn/#sctn-packed-attestation-cert-requirements
     let der_bytes = pubk.to_der()
         .map_err(|e| {
@@ -804,6 +807,54 @@ impl COSEKey {
             }
         }
     }
+
+    // FIXME: The function became public at the commit
+    // a17e8c56cbc135a8ffa3ab38d4df990a6e8a73c8. However, we cannot accommodate
+    // it here, because it is specific to OpenSSL. I decided to comment it out
+    // as a reminder.
+    /*
+    /// Retrieve the public key of this COSEKey as an OpenSSL structure
+    pub fn get_openssl_pkey(&self) -> Result<pkey::PKey<pkey::Public>, WebauthnError> {
+        match &self.key {
+            COSEKeyType::EC_EC2(ec2k) => {
+                // Get the curve type
+                let curve = ec2k.curve.to_openssl_nid();
+                let ec_group =
+                    ec::EcGroup::from_curve_name(curve).map_err(WebauthnError::OpenSSLError)?;
+
+                let xbn =
+                    bn::BigNum::from_slice(ec2k.x.as_ref()).map_err(WebauthnError::OpenSSLError)?;
+                let ybn =
+                    bn::BigNum::from_slice(ec2k.y.as_ref()).map_err(WebauthnError::OpenSSLError)?;
+
+                let ec_key = ec::EcKey::from_public_key_affine_coordinates(&ec_group, &xbn, &ybn)
+                    .map_err(WebauthnError::OpenSSLError)?;
+
+                // Validate the key is sound. IIRC this actually checks the values
+                // are correctly on the curve as specified
+                ec_key.check_key().map_err(WebauthnError::OpenSSLError)?;
+
+                let p = pkey::PKey::from_ec_key(ec_key).map_err(WebauthnError::OpenSSLError)?;
+                Ok(p)
+            }
+            COSEKeyType::RSA(rsak) => {
+                let nbn =
+                    bn::BigNum::from_slice(rsak.n.as_ref()).map_err(WebauthnError::OpenSSLError)?;
+                let ebn = bn::BigNum::from_slice(&rsak.e).map_err(WebauthnError::OpenSSLError)?;
+
+                let rsa_key = rsa::Rsa::from_public_components(nbn, ebn)
+                    .map_err(WebauthnError::OpenSSLError)?;
+
+                let p = pkey::PKey::from_rsa(rsa_key).map_err(WebauthnError::OpenSSLError)?;
+                Ok(p)
+            }
+            _ => {
+                debug!("get_openssl_pkey");
+                Err(WebauthnError::COSEKeyInvalidType)
+            }
+        }
+    }
+    */
 
     /// Verifies data was signed with this [COSEKey].
     pub fn verify_signature(
