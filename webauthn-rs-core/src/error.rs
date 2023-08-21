@@ -1,7 +1,7 @@
 //! Possible errors that may occur during Webauthn Operation processing
 
 use base64::DecodeError as b64DecodeError;
-use serde_cbor::error::Error as CBORError;
+use serde_cbor_2::error::Error as CBORError;
 use serde_json::error::Error as JSONError;
 
 /// A wrapper for `Result<T, WebauthnError>`
