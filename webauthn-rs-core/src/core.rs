@@ -1363,6 +1363,14 @@ mod tests {
     use base64urlsafedata::Base64UrlSafeData;
     use url::Url;
 
+    use webauthn_rs_device_catalog::data::{
+        android::ANDROID_SOFTWARE_ROOT_CA,
+        apple::APPLE_WEBAUTHN_ROOT_CA_PEM,
+        google::{GOOGLE_SAFETYNET_CA, GOOGLE_SAFETYNET_CA_OLD},
+        microsoft::MICROSOFT_TPM_ROOT_CERTIFICATE_AUTHORITY_2014_PEM,
+        yubico::YUBICO_U2F_ROOT_CA_SERIAL_457200631_PEM,
+    };
+
     // Test the crypto operations of the webauthn impl
 
     #[test]
@@ -1406,11 +1414,7 @@ mod tests {
             &zero_chal,
             &[],
             &[COSEAlgorithm::ES256],
-            Some(
-                &AttestationCa::yubico_u2f_root_ca_serial_457200631()
-                    .try_into()
-                    .unwrap(),
-            ),
+            Some(&YUBICO_U2F_ROOT_CA_SERIAL_457200631_PEM.try_into().unwrap()),
             false,
             &RequestRegistrationExtensions::default(),
             true,
@@ -1955,7 +1959,7 @@ mod tests {
             &[],
             &[COSEAlgorithm::ES256],
             // Exclude the matching CA!
-            Some(&(AttestationCa::apple_webauthn_root_ca().try_into().unwrap())),
+            Some(&(APPLE_WEBAUTHN_ROOT_CA_PEM.try_into().unwrap())),
             false,
             &RequestRegistrationExtensions::default(),
             false,
@@ -1967,7 +1971,7 @@ mod tests {
         ));
 
         // Assert this fails when the attestaion ca is correct, but the aaguid is missing.
-        let mut att_ca = AttestationCa::yubico_u2f_root_ca_serial_457200631();
+        let mut att_ca: AttestationCa = YUBICO_U2F_ROOT_CA_SERIAL_457200631_PEM.try_into().unwrap();
         // AAGUID is for yk 5 fips
         att_ca.insert_aaguid(uuid::uuid!("73bb0cd4-e502-49b8-9c6f-b59445bf720b"));
         let att_ca_list: AttestationCaList =
@@ -1989,7 +1993,7 @@ mod tests {
             Err(WebauthnError::AttestationUntrustedAaguid)
         ));
 
-        let mut att_ca = AttestationCa::yubico_u2f_root_ca_serial_457200631();
+        let mut att_ca: AttestationCa = YUBICO_U2F_ROOT_CA_SERIAL_457200631_PEM.try_into().unwrap();
         // AAGUID is for yk5ci
         att_ca.insert_aaguid(uuid::uuid!("c5ef55ff-ad9a-4b9f-b580-adebafe026d0"));
         let att_ca_list: AttestationCaList =
@@ -2461,7 +2465,7 @@ mod tests {
             &[],
             &[COSEAlgorithm::RS256],
             Some(
-                &(AttestationCa::microsoft_tpm_root_certificate_authority_2014()
+                &(MICROSOFT_TPM_ROOT_CERTIFICATE_AUTHORITY_2014_PEM
                     .try_into()
                     .unwrap()),
             ),
@@ -2629,7 +2633,7 @@ mod tests {
         };
 
         // Attempt to request an AAGUID, but this format does not provide one.
-        let mut att_ca = AttestationCa::apple_webauthn_root_ca();
+        let mut att_ca: AttestationCa = APPLE_WEBAUTHN_ROOT_CA_PEM.try_into().unwrap();
         att_ca.insert_aaguid(uuid::uuid!("c5ef55ff-ad9a-4b9f-b580-adebafe026d0"));
         let result = wan.register_credential_internal(
             &rsp_d,
@@ -2678,7 +2682,7 @@ mod tests {
                 COSEAlgorithm::PS512,
                 COSEAlgorithm::EDDSA,
             ],
-            Some(&(AttestationCa::apple_webauthn_root_ca().try_into().unwrap())),
+            Some(&(APPLE_WEBAUTHN_ROOT_CA_PEM.try_into().unwrap())),
             // Must disable time checks because the submission is limited to 5 days.
             true,
             &RequestRegistrationExtensions::default(),
@@ -2705,7 +2709,7 @@ mod tests {
                 COSEAlgorithm::PS512,
                 COSEAlgorithm::EDDSA,
             ],
-            Some(&(AttestationCa::apple_webauthn_root_ca().try_into().unwrap())),
+            Some(&(APPLE_WEBAUTHN_ROOT_CA_PEM.try_into().unwrap())),
             // Must disable time checks because the submission is limited to 5 days.
             true,
             &RequestRegistrationExtensions::default(),
@@ -2846,7 +2850,7 @@ mod tests {
                 COSEAlgorithm::PS512,
                 COSEAlgorithm::EDDSA,
             ],
-            Some(&(AttestationCa::apple_webauthn_root_ca().try_into().unwrap())),
+            Some(&(APPLE_WEBAUTHN_ROOT_CA_PEM.try_into().unwrap())),
             // Must disable time checks because the submission is limited to 5 days.
             true,
             &RequestRegistrationExtensions::default(),
@@ -3642,7 +3646,7 @@ mod tests {
             &chal,
             &[],
             &[COSEAlgorithm::ES256],
-            Some(&(AttestationCa::google_safetynet_ca_old().try_into().unwrap())),
+            Some(&(GOOGLE_SAFETYNET_CA_OLD.try_into().unwrap())),
             true,
             &RequestRegistrationExtensions::default(),
             true,
@@ -3700,7 +3704,7 @@ mod tests {
             &chal,
             &[],
             &[COSEAlgorithm::ES256],
-            Some(&(AttestationCa::google_safetynet_ca().try_into().unwrap())),
+            Some(&(GOOGLE_SAFETYNET_CA.try_into().unwrap())),
             true,
             &RequestRegistrationExtensions::default(),
             true,
@@ -3759,7 +3763,7 @@ mod tests {
             &chal,
             &[],
             &[COSEAlgorithm::ES256],
-            Some(&(AttestationCa::android_software_ca().try_into().unwrap())),
+            Some(&(ANDROID_SOFTWARE_ROOT_CA.try_into().unwrap())),
             true,
             &RequestRegistrationExtensions::default(),
             true,
