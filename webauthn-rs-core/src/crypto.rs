@@ -6,7 +6,8 @@
 #![allow(non_camel_case_types)]
 
 use core::convert::TryFrom;
-use openssl::{bn, ec, hash, nid, pkey, rsa, sha, sign, x509};
+use openssl::{bn, ec, hash, nid, pkey, rsa, sign, x509};
+use ring::digest;
 use x509_parser::x509::X509Version;
 
 // use super::constants::*;
@@ -790,9 +791,10 @@ impl COSEKey {
 
 /// Compute the sha256 of a slice of data.
 pub fn compute_sha256(data: &[u8]) -> [u8; 32] {
-    let mut hasher = sha::Sha256::new();
-    hasher.update(data);
-    hasher.finish()
+    let result = digest::digest(&digest::SHA256, data);
+    let mut hash = [0u8; 32];
+    hash.clone_from_slice(result.as_ref());
+    hash
 }
 
 #[cfg(test)]
