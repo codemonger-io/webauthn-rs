@@ -7,7 +7,15 @@
 
 use core::convert::TryFrom;
 use openssl::{bn, ec, hash, nid, pkey, rsa, sign, x509};
-use ring::digest;
+use p256::{
+    EncodedPoint,
+    ecdsa::{
+        DerSignature,
+        VerifyingKey,
+        signature::DigestVerifier,
+    },
+};
+use sha2::{Sha256, Digest as _};
 use x509_parser::x509::X509Version;
 
 // use super::constants::*;
@@ -29,7 +37,7 @@ use crate::internals::{tpm_device_attribute_parser, TpmVendor};
 //
 
 fn pkey_verify_signature(
-    pkey: &pkey::PKeyRef<pkey::Public>,
+    (pkey, p256_key): (&pkey::PKeyRef<pkey::Public>, Option<VerifyingKey>),
     stype: COSEAlgorithm,
     signature: &[u8],
     verification_data: &[u8],
@@ -64,6 +72,24 @@ fn pkey_verify_signature(
             Err(WebauthnError::COSEKeyInvalidType)
         }
     }?;
+
+    if let Some(p256_key) = p256_key {
+        debug!("signature(len={}): {:?}", signature.len(), signature);
+        match DerSignature::from_bytes(signature) {
+            Ok(signature) => {
+                let mut digest = Sha256::new();
+                digest.update(verification_data);
+                let result = p256_key.verify_digest(
+                    digest,
+                    &signature,
+                );
+                info!("p256 verification result: {:?}", result);
+            }
+            Err(e) => {
+                error!("failed to form a signature: {}", e);
+            }
+        };
+    }
 
     verifier
         .update(verification_data)
@@ -117,7 +143,7 @@ pub(crate) fn verify_signature(
 ) -> Result<bool, WebauthnError> {
     let pkey = pubk.public_key().map_err(WebauthnError::OpenSSLError)?;
 
-    pkey_verify_signature(&pkey, alg, signature, verification_data)
+    pkey_verify_signature((&pkey, None), alg, signature, verification_data)
 }
 
 use x509_parser::prelude::{GeneralName, X509Error, X509Name};
@@ -738,14 +764,24 @@ impl COSEKey {
         }
     }
 
-    fn get_openssl_pkey(&self) -> Result<pkey::PKey<pkey::Public>, WebauthnError> {
+    fn get_openssl_pkey(&self) -> Result<(pkey::PKey<pkey::Public>, Option<VerifyingKey>), WebauthnError> {
         match &self.key {
             COSEKeyType::EC_EC2(ec2k) => {
                 // Get the curve type
+                debug!("curve name: {:?}", ec2k.curve);
                 let curve = ec2k.curve.to_openssl_nid();
                 let ec_group =
                     ec::EcGroup::from_curve_name(curve).map_err(WebauthnError::OpenSSLError)?;
 
+                let encoded_point = EncodedPoint::from_affine_coordinates(
+                    ec2k.x.as_ref().into(),
+                    ec2k.y.as_ref().into(),
+                    false,
+                );
+                debug!("EncodedPoint: {:?}", encoded_point);
+                let p256_key = VerifyingKey::from_encoded_point(&encoded_point)
+                    .or(Err(WebauthnError::Configuration))?;
+                debug!("p256::ecdsa::VerifyingKey: {:?}", p256_key);
                 let xbn =
                     bn::BigNum::from_slice(ec2k.x.as_ref()).map_err(WebauthnError::OpenSSLError)?;
                 let ybn =
@@ -753,13 +789,14 @@ impl COSEKey {
 
                 let ec_key = ec::EcKey::from_public_key_affine_coordinates(&ec_group, &xbn, &ybn)
                     .map_err(WebauthnError::OpenSSLError)?;
+                debug!("OpenSSL key: {:?}", ec_key);
 
                 // Validate the key is sound. IIRC this actually checks the values
                 // are correctly on the curve as specified
                 ec_key.check_key().map_err(WebauthnError::OpenSSLError)?;
 
                 let p = pkey::PKey::from_ec_key(ec_key).map_err(WebauthnError::OpenSSLError)?;
-                Ok(p)
+                Ok((p, Some(p256_key)))
             }
             COSEKeyType::RSA(rsak) => {
                 let nbn =
@@ -770,7 +807,7 @@ impl COSEKey {
                     .map_err(WebauthnError::OpenSSLError)?;
 
                 let p = pkey::PKey::from_rsa(rsa_key).map_err(WebauthnError::OpenSSLError)?;
-                Ok(p)
+                Ok((p, None))
             }
             _ => {
                 debug!("get_openssl_pkey");
@@ -785,16 +822,17 @@ impl COSEKey {
         verification_data: &[u8],
     ) -> Result<bool, WebauthnError> {
         let pkey = self.get_openssl_pkey()?;
-        pkey_verify_signature(&pkey, self.type_, signature, verification_data)
+        pkey_verify_signature((&pkey.0, pkey.1), self.type_, signature, verification_data)
     }
 }
 
 /// Compute the sha256 of a slice of data.
 pub fn compute_sha256(data: &[u8]) -> [u8; 32] {
-    let result = digest::digest(&digest::SHA256, data);
-    let mut hash = [0u8; 32];
-    hash.clone_from_slice(result.as_ref());
-    hash
+    let mut digest = Sha256::new();
+    digest.update(data);
+    let mut output = [0u8; 32];
+    digest.finalize_into((&mut output).into());
+    output
 }
 
 #[cfg(test)]
