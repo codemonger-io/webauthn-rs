@@ -6,16 +6,29 @@
 #![allow(non_camel_case_types)]
 
 use core::convert::TryFrom;
-use openssl::{bn, ec, hash, nid, pkey, rsa, sign, x509};
 use p256::{
     EncodedPoint,
+    // PublicKey as P256PublicKey,
     ecdsa::{
         DerSignature,
-        VerifyingKey,
+        VerifyingKey as P256VerifyingKey,
         signature::DigestVerifier,
     },
 };
+use ::rsa::{
+    BigUint,
+    RsaPublicKey,
+    pkcs1v15::{Signature as RsaSignature, VerifyingKey as RsaVerifyingKey},
+};
+use sha1::Sha1;
 use sha2::{Sha256, Digest as _};
+use x509_cert::{
+    certificate::Certificate,
+    der::{
+        Encode as _,
+        referenced::OwnedToRef,
+    },
+};
 use x509_parser::x509::X509Version;
 
 // use super::constants::*;
@@ -36,6 +49,130 @@ use crate::internals::{tpm_device_attribute_parser, TpmVendor};
 // Object({Integer(-3): Bytes([48, 185, 178, 204, 113, 186, 105, 138, 190, 33, 160, 46, 131, 253, 100, 177, 91, 243, 126, 128, 245, 119, 209, 59, 186, 41, 215, 196, 24, 222, 46, 102]), Integer(-2): Bytes([158, 212, 171, 234, 165, 197, 86, 55, 141, 122, 253, 6, 92, 242, 242, 114, 158, 221, 238, 163, 127, 214, 120, 157, 145, 226, 232, 250, 144, 150, 218, 138]), Integer(-1): U64(1), Integer(1): U64(2), Integer(3): I64(-7)})
 //
 
+// Public key.
+//
+// Aggregates different types of public keys.
+enum PublicKey {
+    ES256(P256VerifyingKey),
+    RS256(RsaVerifyingKey<Sha256>),
+    #[cfg(feature = "insecure-rs1")]
+    INSECURE_RS1(RsaVerifyingKey<Sha1>),
+    #[cfg(not(feature = "insecure-rs1"))]
+    INSECURE_RS1(&'static str),
+}
+
+impl TryFrom<(COSEAlgorithm, &Certificate)> for PublicKey {
+    type Error = WebauthnError;
+
+    fn try_from(
+        (alg, cert): (COSEAlgorithm, &Certificate),
+    ) -> Result<Self, Self::Error> {
+        let pkey_info = cert.tbs_certificate.subject_public_key_info
+            .owned_to_ref();
+        match alg {
+            COSEAlgorithm::ES256 => {
+                P256VerifyingKey::try_from(pkey_info)
+                    .map_err(|e| {
+                        error!(?e, "ES256 public key from certificate");
+                        WebauthnError::TransientError("ES256 public key from certificate")
+                    })
+                    .map(PublicKey::ES256)
+            }
+            COSEAlgorithm::RS256 => {
+                RsaVerifyingKey::<Sha256>::try_from(pkey_info)
+                    .map_err(|e| {
+                        error!(?e, "RS256 public key from certificate");
+                        WebauthnError::TransientError("RS256 public key from certificate")
+                    })
+                    .map(PublicKey::RS256)
+            }
+            COSEAlgorithm::INSECURE_RS1 => {
+                #[cfg(feature = "insecure-rs1")]
+                {
+                    RsaVerifyingKey::<Sha1>::try_from(pkey_info)
+                        .map_err(|e| {
+                            error!(?e, "RS1 public key from certificate");
+                            WebauthnError::TransientError("RS1 public key from certificate")
+                        })
+                        .map(PublicKey::INSECURE_RS1)
+                }
+                #[cfg(not(feature = "insecure-rs1"))]
+                Ok(PublicKey::INSECURE_RS1("INSECURE SHA1"))
+            },
+            _ => {
+                error!(
+                    "unsupported signature algorithm: {:?}",
+                    cert.signature_algorithm.oid,
+                );
+                Err(WebauthnError::TransientError("unsupported signature algorithm"))
+            }
+        }
+    }
+}
+
+impl TryFrom<&COSEKey> for PublicKey {
+    type Error = WebauthnError;
+
+    fn try_from(key: &COSEKey) -> Result<Self, Self::Error> {
+        match &key.key {
+            COSEKeyType::EC_EC2(ec2k) => {
+                let encoded_point = EncodedPoint::from_affine_coordinates(
+                    ec2k.x.as_ref().into(),
+                    ec2k.y.as_ref().into(),
+                    false,
+                );
+                let pkey = P256VerifyingKey::from_encoded_point(&encoded_point)
+                    .map_err(|e| {
+                        error!(?e, "ES256 public key from COSEKey");
+                        WebauthnError::TransientError("ES256 public key from COSEKey")
+                    })?;
+                Ok(PublicKey::ES256(pkey))
+            }
+            COSEKeyType::RSA(rsak) => {
+                let n = BigUint::from_bytes_be(rsak.n.as_ref());
+                let e = BigUint::from_bytes_be(rsak.e.as_ref());
+                let pkey = RsaPublicKey::new(n, e)
+                    .map_err(|e| {
+                        error!(?e, "RS256 public key from COSEKey");
+                        WebauthnError::TransientError("RS256 public key from COSEKey")
+                    })?;
+                match key.type_ {
+                    COSEAlgorithm::RS256 => {
+                        let pkey = RsaVerifyingKey::<Sha256>::new(pkey);
+                        Ok(PublicKey::RS256(pkey))
+                    }
+                    COSEAlgorithm::INSECURE_RS1 => {
+                        #[cfg(feature = "insecure-rs1")]
+                        {
+                            let pkey = RsaVerifyingKey::<Sha1>::new(pkey);
+                            Ok(PublicKey::INSECURE_RS1(pkey))
+                        }
+                        #[cfg(not(feature = "insecure-rs1"))]
+                        Ok(PublicKey::INSECURE_RS1("INSECURE SHA1"))
+                    }
+                    // other RSA variants are not supported
+                    COSEAlgorithm::RS384 |
+                    COSEAlgorithm::RS512 |
+                    COSEAlgorithm::PS256 |
+                    COSEAlgorithm::PS384 |
+                    COSEAlgorithm::PS512 => {
+                        error!("unsupported RSA variant: {:?}", key.type_);
+                        Err(WebauthnError::COSEKeyInvalidType)
+                    }
+                    _ => {
+                        error!("unsupported COSE algorithm: {:?}", key.type_);
+                        Err(WebauthnError::COSEKeyInvalidType)
+                    }
+                }
+            }
+            _ => {
+                Err(WebauthnError::COSEKeyInvalidType)
+            }
+        }
+    }
+}
+
+/*
 fn pkey_verify_signature(
     (pkey, p256_key): (&pkey::PKeyRef<pkey::Public>, Option<VerifyingKey>),
     stype: COSEAlgorithm,
@@ -97,7 +234,80 @@ fn pkey_verify_signature(
     verifier
         .verify(signature)
         .map_err(WebauthnError::OpenSSLError)
+} */
+
+fn pkey_verify_signature(
+    pkey: &PublicKey,
+    signature: &[u8],
+    verification_data: &[u8],
+) -> Result<bool, WebauthnError> {
+    match pkey {
+        PublicKey::ES256(pkey) => {
+            let signature = DerSignature::from_bytes(signature)
+                .map_err(|e| {
+                    error!(?e, "signature DER decoding");
+                    WebauthnError::TransientError("signature DER decoding")
+                })?;
+            let mut digest = Sha256::new();
+            digest.update(verification_data);
+            let result = pkey.verify_digest(digest, &signature);
+            Ok(result.is_ok())
+        }
+        PublicKey::RS256(pkey) => {
+            let signature = RsaSignature::try_from(signature)
+                .map_err(|e| {
+                    error!(?e, "RS256 signature decoding");
+                    WebauthnError::TransientError("RS256 signature decoding")
+                })?;
+            let mut digest = Sha256::new();
+            digest.update(verification_data);
+            let result = pkey.verify_digest(digest, &signature);
+            Ok(result.is_ok())
+        }
+        PublicKey::INSECURE_RS1(pkey) => {
+            #[cfg(feature = "insecure-rs1")]
+            {
+                let signature = RsaSignature::try_from(signature)
+                    .map_err(|e| {
+                        error!(?e, "RS1 signature decoding");
+                        WebauthnError::TransientError("RS1 signature decoding")
+                    })?;
+                let mut digest = Sha1::new();
+                digest.update(verification_data);
+                let result = pkey.verify_digest(digest, &signature);
+                Ok(result.is_ok())
+            }
+            #[cfg(not(feature = "insecure-rs1"))]
+            {
+                error!("{}", pkey);
+                Err(WebauthnError::CredentialInsecureCryptography)
+            }
+        }
+    }
 }
+
+/*
+fn p256_verify_signature(
+    p256_key: VerifyingKey,
+    signature: &[u8],
+    verification_data: &[u8],
+) -> Result<bool, WebauthnError> {
+    match DerSignature::from_bytes(signature) {
+        Ok(signature) => {
+            let mut digest = Sha256::new();
+            digest.update(verification_data);
+            let result = p256_key.verify_digest(
+                digest,
+                &signature,
+            );
+            Ok(result.is_ok())
+        }
+        Err(e) => {
+            error!("ES256 verification error: {}", e);
+            return Err(WebauthnError::TransientError("malformed signature"));
+        }
+    }
+} */
 
 /*
 impl TryFrom<(&[u8], COSEAlgorithm)> for X509PublicKey {
@@ -135,6 +345,7 @@ impl TryFrom<(&[u8], COSEAlgorithm)> for X509PublicKey {
 }
 */
 
+/*
 pub(crate) fn verify_signature(
     alg: COSEAlgorithm,
     pubk: &x509::X509,
@@ -144,6 +355,25 @@ pub(crate) fn verify_signature(
     let pkey = pubk.public_key().map_err(WebauthnError::OpenSSLError)?;
 
     pkey_verify_signature((&pkey, None), alg, signature, verification_data)
+} */
+
+pub(crate) fn verify_signature(
+    alg: COSEAlgorithm,
+    cert: &Certificate,
+    signature: &[u8],
+    verification_data: &[u8],
+) -> Result<bool, WebauthnError> {
+    let pkey = PublicKey::try_from((alg, cert))?;
+    pkey_verify_signature(&pkey, signature, verification_data)
+    /*
+    error!("public key: {:?}", pubk.tbs_certificate.subject_public_key_info);
+    let p256_key = VerifyingKey::try_from(
+        pubk.tbs_certificate.subject_public_key_info.owned_to_ref(),
+    ).map_err(|e| {
+        error!("malformed ES256 public key: {}", e);
+        WebauthnError::TransientError("malformed ES256 public key")
+    })?;
+    p256_verify_signature(p256_key, signature, verification_data) */
 }
 
 use x509_parser::prelude::{GeneralName, X509Error, X509Name};
@@ -255,8 +485,12 @@ impl<'a> TryFrom<&'a X509Name<'a>> for TpmSanData<'a> {
     }
 }
 
-pub(crate) fn assert_tpm_attest_req(x509: &x509::X509) -> Result<(), WebauthnError> {
-    let der_bytes = x509.to_der()?;
+pub(crate) fn assert_tpm_attest_req(x509: &Certificate) -> Result<(), WebauthnError> {
+    let der_bytes = x509.to_der()
+        .map_err(|e| {
+            error!(?e, "certificate DER encoding");
+            WebauthnError::TransientError("certificate DER encoding")
+        })?;
     let x509_cert = x509_parser::parse_x509_certificate(&der_bytes)
         .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)?
         .1;
@@ -269,8 +503,7 @@ pub(crate) fn assert_tpm_attest_req(x509: &x509::X509) -> Result<(), WebauthnErr
     }
 
     // Subject field MUST be set to empty.
-    let subject_name_ref = x509.subject_name();
-    if subject_name_ref.entries().count() != 0 {
+    if x509.tbs_certificate.subject.0.len() != 0 {
         return Err(WebauthnError::AttestationCertificateRequirementsNotMet);
     }
 
@@ -339,11 +572,15 @@ pub(crate) fn assert_tpm_attest_req(x509: &x509::X509) -> Result<(), WebauthnErr
     Ok(())
 }
 
-pub(crate) fn assert_packed_attest_req(pubk: &x509::X509) -> Result<(), WebauthnError> {
+pub(crate) fn assert_packed_attest_req(pubk: &Certificate) -> Result<(), WebauthnError> {
     // Verify that attestnCert meets the requirements in § 8.2.1 Packed Attestation
     // Statement Certificate Requirements.
     // https://w3c.github.io/webauthn/#sctn-packed-attestation-cert-requirements
-    let der_bytes = pubk.to_der()?;
+    let der_bytes = pubk.to_der()
+        .map_err(|e| {
+            error!("failed to encode certificate to DER: {}", e);
+            WebauthnError::TransientError("failed to encode certificate to DER")
+        })?;
     let x509_cert = x509_parser::parse_x509_certificate(&der_bytes)
         .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)?
         .1;
@@ -424,6 +661,7 @@ pub(crate) fn assert_packed_attest_req(pubk: &x509::X509) -> Result<(), Webauthn
     Ok(())
 }
 
+/*
 impl TryFrom<nid::Nid> for ECDSACurve {
     type Error = WebauthnError;
     fn try_from(nid: nid::Nid) -> Result<Self, Self::Error> {
@@ -434,8 +672,9 @@ impl TryFrom<nid::Nid> for ECDSACurve {
             _ => Err(WebauthnError::ECDSACurveInvalidNid),
         }
     }
-}
+} */
 
+/*
 impl ECDSACurve {
     fn to_openssl_nid(&self) -> nid::Nid {
         match self {
@@ -444,7 +683,7 @@ impl ECDSACurve {
             ECDSACurve::SECP521R1 => nid::Nid::SECP521R1,
         }
     }
-}
+} */
 
 /*
 impl EDDSACurve {
@@ -465,9 +704,13 @@ pub(crate) fn only_hash_from_type(
         COSEAlgorithm::INSECURE_RS1 => {
             // sha1
             warn!("INSECURE SHA1 USAGE DETECTED");
+            let mut hasher = Sha1::new();
+            hasher.update(input);
+            Ok(hasher.finalize().to_vec())
+            /*
             hash::hash(hash::MessageDigest::sha1(), input)
                 .map(|dbytes| Vec::from(dbytes.as_ref()))
-                .map_err(WebauthnError::OpenSSLError)
+                .map_err(WebauthnError::OpenSSLError) */
         }
         c_alg => {
             debug!(?c_alg, "WebauthnError::COSEKeyInvalidType");
@@ -643,11 +886,62 @@ impl TryFrom<&serde_cbor::Value> for COSEKey {
     }
 }
 
-impl TryFrom<(COSEAlgorithm, &x509::X509)> for COSEKey {
+impl TryFrom<(COSEAlgorithm, &Certificate)> for COSEKey {
     type Error = WebauthnError;
-    fn try_from((alg, pubk): (COSEAlgorithm, &x509::X509)) -> Result<COSEKey, Self::Error> {
+    fn try_from((alg, pubk): (COSEAlgorithm, &Certificate)) -> Result<COSEKey, Self::Error> {
+        // common public key parameter extraction for p256, p384, and p521
+        // generics may also work, though, type bounds will be too complicated
+        macro_rules! extract_ec_key_x_y {
+            ($curve:ident) => {
+                {
+                    // note that p521::ecdsa::VerifyingKey does not implement
+                    // `From<SubjectPublicKeyInfo>`
+                    use $curve::elliptic_curve::sec1::ToEncodedPoint as _;
+                    let ec_key = $curve::PublicKey::try_from(
+                        pubk.tbs_certificate.subject_public_key_info.owned_to_ref(),
+                    ).map_err(|e| {
+                        error!(?e, "extracting EC public key");
+                        WebauthnError::TransientError("extracting EC public key")
+                    })?;
+                    let encoded_point = ec_key.to_encoded_point(false);
+                    let x = encoded_point
+                        .x()
+                        .ok_or(WebauthnError::TransientError("elliptic curve x"))?
+                        .to_vec();
+                    let y = encoded_point
+                        .y()
+                        .ok_or(WebauthnError::TransientError("elliptic curve y"))?
+                        .to_vec();
+                    (x, y)
+                }
+            };
+        }
+
         let key = match alg {
-            COSEAlgorithm::ES256 | COSEAlgorithm::ES384 | COSEAlgorithm::ES512 => {
+            COSEAlgorithm::ES256 => {
+                let (x, y) = extract_ec_key_x_y!(p256);
+                Ok(COSEKeyType::EC_EC2(COSEEC2Key {
+                    curve: ECDSACurve::SECP256R1,
+                    x: x.into(),
+                    y: y.into(),
+                }))
+            }
+            COSEAlgorithm::ES384 => {
+                let (x, y) = extract_ec_key_x_y!(p384);
+                Ok(COSEKeyType::EC_EC2(COSEEC2Key {
+                    curve: ECDSACurve::SECP384R1,
+                    x: x.into(),
+                    y: y.into(),
+                }))
+            }
+            COSEAlgorithm::ES512 => {
+                let (x, y) = extract_ec_key_x_y!(p521);
+                Ok(COSEKeyType::EC_EC2(COSEEC2Key {
+                    curve: ECDSACurve::SECP521R1,
+                    x: x.into(),
+                    y: y.into(),
+                }))
+                /*
                 let ec_key = pubk
                     .public_key()
                     .and_then(|pk| pk.ec_key())
@@ -682,7 +976,7 @@ impl TryFrom<(COSEAlgorithm, &x509::X509)> for COSEKey {
                     curve,
                     x: xbn.to_vec().into(),
                     y: ybn.to_vec().into(),
-                }))
+                })) */
             }
             COSEAlgorithm::RS256
             | COSEAlgorithm::RS384
@@ -727,6 +1021,30 @@ impl COSEKey {
     pub(crate) fn validate(&self) -> Result<(), WebauthnError> {
         match &self.key {
             COSEKeyType::EC_EC2(ec2k) => {
+                macro_rules! validate_ec_key {
+                    ($curve:ident) => {
+                        {
+                            let encoded_point =
+                                $curve::EncodedPoint::from_affine_coordinates(
+                                    ec2k.x.as_ref().into(),
+                                    ec2k.y.as_ref().into(),
+                                    false,
+                                );
+                            $curve::PublicKey::try_from(encoded_point)
+                                .map_err(|e| {
+                                    error!(?e, "validating EC public key");
+                                    WebauthnError::TransientError("validating EC public key")
+                                })?;
+                            Ok(())
+                        }
+                    };
+                }
+                match ec2k.curve {
+                    ECDSACurve::SECP256R1 => validate_ec_key!(p256),
+                    ECDSACurve::SECP384R1 => validate_ec_key!(p384),
+                    ECDSACurve::SECP521R1 => validate_ec_key!(p521),
+                }
+                /*
                 // Get the curve type
                 let curve = ec2k.curve.to_openssl_nid();
                 let ec_group =
@@ -740,15 +1058,23 @@ impl COSEKey {
                 let ec_key = ec::EcKey::from_public_key_affine_coordinates(&ec_group, &xbn, &ybn)
                     .map_err(WebauthnError::OpenSSLError)?;
 
-                ec_key.check_key().map_err(WebauthnError::OpenSSLError)
+                ec_key.check_key().map_err(WebauthnError::OpenSSLError) */
             }
             COSEKeyType::RSA(rsak) => {
+                let n = BigUint::from_bytes_be(rsak.n.as_ref());
+                let e = BigUint::from_bytes_be(rsak.e.as_ref());
+                RsaPublicKey::new(n, e)
+                    .map_err(|e| {
+                        error!(?e, "verifying RSA public key");
+                        WebauthnError::TransientError("verifying RSA public key")
+                    })?;
+                /*
                 let nbn =
                     bn::BigNum::from_slice(rsak.n.as_ref()).map_err(WebauthnError::OpenSSLError)?;
                 let ebn = bn::BigNum::from_slice(&rsak.e).map_err(WebauthnError::OpenSSLError)?;
 
                 let _rsa_key = rsa::Rsa::from_public_components(nbn, ebn)
-                    .map_err(WebauthnError::OpenSSLError)?;
+                    .map_err(WebauthnError::OpenSSLError)?; */
                 /*
                 // Only applies to keys with private components!
                 rsa_key
@@ -764,6 +1090,7 @@ impl COSEKey {
         }
     }
 
+    /*
     fn get_openssl_pkey(&self) -> Result<(pkey::PKey<pkey::Public>, Option<VerifyingKey>), WebauthnError> {
         match &self.key {
             COSEKeyType::EC_EC2(ec2k) => {
@@ -814,15 +1141,18 @@ impl COSEKey {
                 Err(WebauthnError::COSEKeyInvalidType)
             }
         }
-    }
+    } */
 
     pub(crate) fn verify_signature(
         &self,
         signature: &[u8],
         verification_data: &[u8],
     ) -> Result<bool, WebauthnError> {
+        let pkey = PublicKey::try_from(self)?;
+        pkey_verify_signature(&pkey, signature, verification_data)
+        /*
         let pkey = self.get_openssl_pkey()?;
-        pkey_verify_signature((&pkey.0, pkey.1), self.type_, signature, verification_data)
+        pkey_verify_signature((&pkey.0, pkey.1), self.type_, signature, verification_data) */
     }
 }
 
@@ -842,13 +1172,14 @@ mod tests {
     use super::*;
     use hex_literal::hex;
     use serde_cbor::Value;
+    /*
     #[test]
     fn nid_to_curve() {
         assert_eq!(
             ECDSACurve::try_from(nid::Nid::X9_62_PRIME256V1).unwrap(),
             ECDSACurve::SECP256R1
         );
-    }
+    } */
 
     #[test]
     fn cbor_es256() {

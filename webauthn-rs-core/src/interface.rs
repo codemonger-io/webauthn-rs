@@ -14,9 +14,14 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-use openssl::hash::MessageDigest;
-use openssl::x509;
+// use openssl::hash::MessageDigest;
+// use openssl::x509;
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
+use x509_cert::{
+    certificate::Certificate,
+    der::{Decode as _, DecodePem as _, Encode as _},
+};
 
 /// Representation of an AAGUID
 /// <https://www.w3.org/TR/webauthn/#aaguid>
@@ -275,6 +280,7 @@ impl Credential {
             &self.attestation.data,
             ca_list,
             danger_disable_certificate_time_checks,
+            None, // TODO: won't work for TPM attestation statement certificates
         )
     }
 }
@@ -449,16 +455,16 @@ pub enum AttestationMetadata {
 pub enum ParsedAttestationData {
     /// The credential is authenticated by a signing X509 Certificate
     /// from a vendor or provider.
-    Basic(Vec<x509::X509>),
+    Basic(Vec<Certificate>),
     /// The credential is authenticated using surrogate basic attestation
     /// it uses the credential private key to create the attestation signature
     Self_,
     /// The credential is authenticated using a CA, and may provide a
     /// ca chain to validate to it's root.
-    AttCa(Vec<x509::X509>),
+    AttCa(Vec<Certificate>),
     /// The credential is authenticated using an anonymization CA, and may provide a ca chain to
     /// validate to it's root.
-    AnonCa(Vec<x509::X509>),
+    AnonCa(Vec<Certificate>),
     /// Unimplemented
     ECDAA,
     /// No Attestation type was provided with this Credential. If in doubt
@@ -508,7 +514,11 @@ impl TryFrom<SerialisableAttestationData> for ParsedAttestationData {
             SerialisableAttestationData::Basic(chain) => ParsedAttestationData::Basic(
                 chain
                     .into_iter()
-                    .map(|c| x509::X509::from_der(&c.0).map_err(WebauthnError::OpenSSLError))
+                    .map(|c| Certificate::from_der(&c.0)
+                        .map_err(|e| {
+                            error!(?e, "certificate DER decoding");
+                            WebauthnError::TransientError("certificate DER decoding")
+                        }))
                     .collect::<WebauthnResult<_>>()?,
             ),
             SerialisableAttestationData::Self_ => ParsedAttestationData::Self_,
@@ -516,14 +526,22 @@ impl TryFrom<SerialisableAttestationData> for ParsedAttestationData {
                 // x509::X509::from_der(&c.0).map_err(WebauthnError::OpenSSLError)?,
                 chain
                     .into_iter()
-                    .map(|c| x509::X509::from_der(&c.0).map_err(WebauthnError::OpenSSLError))
+                    .map(|c| Certificate::from_der(&c.0)
+                        .map_err(|e| {
+                            error!(?e, "certificate DER decoding");
+                            WebauthnError::TransientError("certificate DER decoding")
+                        }))
                     .collect::<WebauthnResult<_>>()?,
             ),
             SerialisableAttestationData::AnonCa(chain) => ParsedAttestationData::AnonCa(
                 // x509::X509::from_der(&c.0).map_err(WebauthnError::OpenSSLError)?,
                 chain
                     .into_iter()
-                    .map(|c| x509::X509::from_der(&c.0).map_err(WebauthnError::OpenSSLError))
+                    .map(|c| Certificate::from_der(&c.0)
+                        .map_err(|e| {
+                            error!(?e, "certificate DER decoding");
+                            WebauthnError::TransientError("certificate DER decoding")
+                        }))
                     .collect::<WebauthnResult<_>>()?,
             ),
             SerialisableAttestationData::ECDAA => ParsedAttestationData::ECDAA,
@@ -686,7 +704,7 @@ pub struct SerialisableAttestationCa {
 )]
 pub struct AttestationCa {
     /// The x509 root CA of the attestation chain that a security key will be attested to.
-    pub ca: x509::X509,
+    pub ca: Certificate,
     /// If not empty, the set of acceptable AAGUIDS (Device Ids) that are allowed to be
     /// attested as trusted by this CA. AAGUIDS that are not in this set, but signed by
     /// this CA will NOT be trusted.
@@ -707,7 +725,11 @@ impl TryFrom<SerialisableAttestationCa> for AttestationCa {
 
     fn try_from(data: SerialisableAttestationCa) -> Result<Self, Self::Error> {
         Ok(AttestationCa {
-            ca: x509::X509::from_der(&data.ca.0).map_err(WebauthnError::OpenSSLError)?,
+            ca: Certificate::from_der(&data.ca.0)
+                .map_err(|e| {
+                    error!(?e, "decoding AttestationCa from DER");
+                    WebauthnError::TransientError("decoding AttestationCa from DER")
+                })?,
             aaguids: data.aaguids,
         })
     }
@@ -716,10 +738,23 @@ impl TryFrom<SerialisableAttestationCa> for AttestationCa {
 impl AttestationCa {
     /// Retrieve the Key Identifier for this Attestation Ca
     pub fn get_kid(&self) -> Result<Vec<u8>, WebauthnError> {
+        self
+            .ca
+            .to_der()
+            .map_err(|e| {
+                error!(?e, "encoding AttestationCa to DER");
+                WebauthnError::TransientError("encoding AttestationCa to DER")
+            })
+            .map(|der| {
+                let mut hasher = Sha256::new();
+                hasher.update(der.as_slice());
+                hasher.finalize().to_vec()
+            })
+        /*
         self.ca
             .digest(MessageDigest::sha256())
             .map_err(WebauthnError::OpenSSLError)
-            .map(|bytes| bytes.to_vec())
+            .map(|bytes| bytes.to_vec()) */
     }
 
     /// Update the set of aaguids this Attestation CA allows. If an empty btreeset is provided then
@@ -737,7 +772,10 @@ impl AttestationCa {
     /// Create a customised attestation CA from a DER public key.
     pub fn new_from_der(data: &[u8]) -> Result<Self, WebauthnError> {
         Ok(AttestationCa {
-            ca: x509::X509::from_der(data).map_err(WebauthnError::OpenSSLError)?,
+            ca: Certificate::from_der(data).map_err(|e| {
+                error!(?e, "decoding AttestationCa from DER");
+                WebauthnError::TransientError("decoding AttestationCa from DER")
+            })?,
             aaguids: BTreeSet::default(),
         })
     }
@@ -745,7 +783,7 @@ impl AttestationCa {
     /// The Apple TouchID and FaceID root CA.
     pub fn apple_webauthn_root_ca() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(APPLE_WEBAUTHN_ROOT_CA_PEM).expect("Invalid DER"),
+            ca: Certificate::from_pem(APPLE_WEBAUTHN_ROOT_CA_PEM).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -753,7 +791,7 @@ impl AttestationCa {
     /// The yubico u2f root ca. Applies to all devices up to and including series 5.
     pub fn yubico_u2f_root_ca_serial_457200631() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(YUBICO_U2F_ROOT_CA_SERIAL_457200631_PEM).expect("Invalid DER"),
+            ca: Certificate::from_pem(YUBICO_U2F_ROOT_CA_SERIAL_457200631_PEM).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -767,7 +805,7 @@ impl AttestationCa {
     /// strict category.
     pub fn microsoft_tpm_root_certificate_authority_2014() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(MICROSOFT_TPM_ROOT_CERTIFICATE_AUTHORITY_2014_PEM)
+            ca: Certificate::from_pem(MICROSOFT_TPM_ROOT_CERTIFICATE_AUTHORITY_2014_PEM)
                 .expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
@@ -779,7 +817,7 @@ impl AttestationCa {
     /// and easy to break or destroy.
     pub fn nitrokey_fido2_root_ca() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(NITROKEY_FIDO2_ROOT_CA_PEM).expect("Invalid DER"),
+            ca: Certificate::from_pem(NITROKEY_FIDO2_ROOT_CA_PEM).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -790,7 +828,7 @@ impl AttestationCa {
     /// and easy to break or destroy.
     pub fn nitrokey_u2f_root_ca() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(NITROKEY_U2F_ROOT_CA_PEM).expect("Invalid DER"),
+            ca: Certificate::from_pem(NITROKEY_U2F_ROOT_CA_PEM).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -798,7 +836,7 @@ impl AttestationCa {
     /// Android ROOT CA 1
     pub fn android_root_ca_1() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(ANDROID_ROOT_CA_1).expect("Invalid DER"),
+            ca: Certificate::from_pem(ANDROID_ROOT_CA_1).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -806,7 +844,7 @@ impl AttestationCa {
     /// Android ROOT CA 2
     pub fn android_root_ca_2() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(ANDROID_ROOT_CA_2).expect("Invalid DER"),
+            ca: Certificate::from_pem(ANDROID_ROOT_CA_2).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -814,7 +852,7 @@ impl AttestationCa {
     /// Android ROOT CA 3
     pub fn android_root_ca_3() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(ANDROID_ROOT_CA_3).expect("Invalid DER"),
+            ca: Certificate::from_pem(ANDROID_ROOT_CA_3).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -822,7 +860,7 @@ impl AttestationCa {
     /// Android SOFTWARE ONLY root CA
     pub fn android_software_ca() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(ANDROID_SOFTWARE_ROOT_CA).expect("Invalid DER"),
+            ca: Certificate::from_pem(ANDROID_SOFTWARE_ROOT_CA).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -830,7 +868,7 @@ impl AttestationCa {
     /// Google SafetyNet CA (for android)
     pub fn google_safetynet_ca() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(GOOGLE_SAFETYNET_CA).expect("Invalid DER"),
+            ca: Certificate::from_pem(GOOGLE_SAFETYNET_CA).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }
@@ -839,7 +877,7 @@ impl AttestationCa {
     #[allow(unused)]
     pub(crate) fn google_safetynet_ca_old() -> Self {
         AttestationCa {
-            ca: x509::X509::from_pem(GOOGLE_SAFETYNET_CA_OLD).expect("Invalid DER"),
+            ca: Certificate::from_pem(GOOGLE_SAFETYNET_CA_OLD).expect("Invalid DER"),
             aaguids: BTreeSet::default(),
         }
     }

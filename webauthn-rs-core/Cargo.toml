@@ -25,16 +25,23 @@ nom = "7.1"
 base64 = "0.13"
 thiserror = "1.0"
 tracing = "0.1"
-openssl = { version = "0.10" }
 # We could consider replacing this with openssl rand.
 rand = { version = "0.8" }
 url = { version = "2", features = ["serde"] }
 x509-parser = "0.13.0"
 der-parser = "7.0.0"
-compact_jwt = "0.2.3"
+compact_jwt_wo_openssl = { git = "https://github.com/codemonger-io/compact-jwt.git", tag = "v0.2.9-wo-openssl" }
 uuid = { version = "1", features = ["serde"] }
 p256 = "0.13"
-sha2 = "0.10"
+p384 = "0.13"
+p521 = "0.13"
+sha1 = { version = "0.10", features = ["oid"] }
+sha2 = { version = "0.10", features = ["oid"] }
+x509-cert = "0.2"
+x509-path-finder = { git = "https://github.com/codemonger-io/x509-path-finder.git", tag = "v0.7.1-sync.3" }
+rustls-webpki = { git = "https://github.com/codemonger-io/webpki.git", tag = "v0.101.7-ext.1" }
+const-oid = { version = "0.9", features = ["db"] }
+rsa = "0.9"
 
 [dev-dependencies]
 hex-literal = "0.3"

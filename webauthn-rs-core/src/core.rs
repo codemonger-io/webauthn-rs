@@ -30,6 +30,7 @@ use crate::error::WebauthnError;
 use crate::internals::*;
 use crate::proto::*;
 use base64urlsafedata::Base64UrlSafeData;
+use webpki::KeyUsage;
 
 /// This is the core of the Webauthn operations. It provides 4 interfaces that you will likely
 /// use the most:
@@ -501,37 +502,58 @@ impl WebauthnCore {
         debug!("attestation is: {:?}", &attest_format);
         debug!("attested credential data is: {:?}", &acd);
 
-        let (attestation_data, attestation_metadata) = match attest_format {
+        let (attestation_data, attestation_metadata, key_usage) = match attest_format {
             AttestationFormat::FIDOU2F => (
                 verify_fidou2f_attestation(acd, &data.attestation_object, &client_data_json_hash)?,
                 AttestationMetadata::None,
+                None,
             ),
             AttestationFormat::Packed => {
-                verify_packed_attestation(acd, &data.attestation_object, &client_data_json_hash)?
+                let (data, metadata) = verify_packed_attestation(acd, &data.attestation_object, &client_data_json_hash)?;
+                (data, metadata, None)
             }
             // AttestationMetadata::None,
             AttestationFormat::Tpm => {
-                verify_tpm_attestation(acd, &data.attestation_object, &client_data_json_hash)?
+                let (data, metadata) =verify_tpm_attestation(acd, &data.attestation_object, &client_data_json_hash)?;
+                (
+                    data,
+                    metadata,
+                    // tcg-kp-AIKCertificate = 2.23.133.8.3
+                    Some(KeyUsage::required(&[(40 * 2) + 23, 0x81, 5, 8, 3])),
+                )
             }
             // AttestationMetadata::None,
-            AttestationFormat::AppleAnonymous => verify_apple_anonymous_attestation(
-                acd,
-                &data.attestation_object,
-                &client_data_json_hash,
-            )?,
+            AttestationFormat::AppleAnonymous => {
+                let (data, metadata) = verify_apple_anonymous_attestation(
+                    acd,
+                    &data.attestation_object,
+                    &client_data_json_hash,
+                )?;
+                (data, metadata, None)
+            }
             // AttestationMetadata::None,
-            AttestationFormat::AndroidKey => verify_android_key_attestation(
-                acd,
-                &data.attestation_object,
-                &client_data_json_hash,
-            )?,
-            AttestationFormat::AndroidSafetyNet => verify_android_safetynet_attestation(
-                acd,
-                &data.attestation_object,
-                &client_data_json_hash,
-                danger_disable_certificate_time_checks,
-            )?,
-            AttestationFormat::None => (ParsedAttestationData::None, AttestationMetadata::None),
+            AttestationFormat::AndroidKey => {
+                let (data, metadata) = verify_android_key_attestation(
+                    acd,
+                    &data.attestation_object,
+                    &client_data_json_hash,
+                )?;
+                (data, metadata, None)
+            }
+            AttestationFormat::AndroidSafetyNet => {
+                let (data, metadata) = verify_android_safetynet_attestation(
+                    acd,
+                    &data.attestation_object,
+                    &client_data_json_hash,
+                    danger_disable_certificate_time_checks,
+                )?;
+                (data, metadata, None)
+            }
+            AttestationFormat::None => (
+                ParsedAttestationData::None,
+                AttestationMetadata::None,
+                None,
+            ),
         };
 
         let credential: Credential = Credential::new(
@@ -575,6 +597,7 @@ impl WebauthnCore {
                 &credential.attestation.data,
                 ca_list,
                 danger_disable_certificate_time_checks,
+                key_usage,
             )?;
 
             // It may seem odd to unwrap the option and make this not verified at this point,
