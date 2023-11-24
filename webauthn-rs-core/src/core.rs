@@ -26,7 +26,7 @@ use crate::attestation::{
     verify_apple_anonymous_attestation, verify_attestation_ca_chain, verify_fidou2f_attestation,
     verify_packed_attestation, verify_tpm_attestation, AttestationFormat,
 };
-use crate::constants::{CHALLENGE_SIZE_BYTES, DEFAULT_AUTHENTICATOR_TIMEOUT};
+use crate::constants::CHALLENGE_SIZE_BYTES;
 use crate::crypto::compute_sha256;
 use crate::error::WebauthnError;
 use crate::internals::*;
@@ -86,7 +86,7 @@ impl WebauthnCore {
         rp_name: &str,
         rp_id: &str,
         allowed_origins: Vec<Url>,
-        authenticator_timeout: Option<Duration>,
+        authenticator_timeout: Duration,
         allow_subdomains_origin: Option<bool>,
         allow_any_port: Option<bool>,
     ) -> Self {
@@ -96,7 +96,7 @@ impl WebauthnCore {
             rp_id: rp_id.to_string(),
             rp_id_hash,
             allowed_origins,
-            authenticator_timeout: authenticator_timeout.unwrap_or(DEFAULT_AUTHENTICATOR_TIMEOUT),
+            authenticator_timeout,
             require_valid_counter_value: true,
             ignore_unsupported_attestation_formats: true,
             allow_cross_origin: false,
@@ -1368,6 +1368,7 @@ mod tests {
     use crate::{internals::*, AttestationFormat};
     use base64::{engine::general_purpose::STANDARD, Engine};
     use base64urlsafedata::Base64UrlSafeData;
+    use std::time::Duration;
     use url::Url;
 
     use webauthn_rs_device_catalog::data::{
@@ -1378,6 +1379,8 @@ mod tests {
         yubico::YUBICO_U2F_ROOT_CA_SERIAL_457200631_PEM,
     };
 
+    const AUTHENTICATOR_TIMEOUT: Duration = Duration::from_secs(60);
+
     // Test the crypto operations of the webauthn impl
 
     #[test]
@@ -1387,7 +1390,7 @@ mod tests {
             "http://127.0.0.1:8080/auth",
             "127.0.0.1",
             vec![Url::parse("http://127.0.0.1:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1438,7 +1441,7 @@ mod tests {
             "webauthn.io",
             "webauthn.io",
             vec![Url::parse("https://webauthn.io").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1483,7 +1486,7 @@ mod tests {
             "localhost:8443/auth",
             "localhost",
             vec![Url::parse("https://localhost:8443").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1528,7 +1531,7 @@ mod tests {
             "localhost:8080/auth",
             "localhost",
             vec![Url::parse("http://localhost:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1573,7 +1576,7 @@ mod tests {
             "webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au/compat_test").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1618,7 +1621,7 @@ mod tests {
             "webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au/compat_test").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1666,7 +1669,7 @@ mod tests {
             "localhost:8080/auth",
             "localhost",
             vec![Url::parse("http://localhost:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1788,7 +1791,7 @@ mod tests {
             "https://testing.local",
             "testing.local",
             vec![Url::parse("https://testing.local").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -1911,7 +1914,7 @@ mod tests {
             "https://172.20.0.141:8443/auth",
             "172.20.0.141",
             vec![Url::parse("https://172.20.0.141:8443").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -2038,7 +2041,7 @@ mod tests {
             "https://etools-dev.example.com:8080/auth",
             "etools-dev.example.com",
             vec![Url::parse("https://etools-dev.example.com:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -2182,7 +2185,7 @@ mod tests {
             "https://etools-dev.example.com:8080/auth",
             "etools-dev.example.com",
             vec![Url::parse("https://etools-dev.example.com:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -2498,7 +2501,7 @@ mod tests {
             "https://etools-dev.example.com:8080/auth",
             "etools-dev.example.com",
             vec![Url::parse("https://etools-dev.example.com:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -2532,7 +2535,7 @@ mod tests {
             "https://spectral.local:8443/auth",
             "spectral.local",
             vec![Url::parse("https://spectral.local:8443").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -2734,7 +2737,7 @@ mod tests {
             "https://spectral.local:8443/auth",
             "spectral.local",
             vec![Url::parse("https://spectral.local:8443").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -2877,7 +2880,7 @@ mod tests {
             "http://127.0.0.1:8080/auth",
             "127.0.0.1",
             vec![Url::parse("http://127.0.0.1:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3028,7 +3031,7 @@ mod tests {
             "rp_name",
             "idm.example.com",
             vec![Url::parse("https://idm.example.com:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             Some(true),
             None,
         );
@@ -3200,7 +3203,7 @@ mod tests {
             "http://localhost:8080/auth",
             "localhost",
             vec![Url::parse("http://localhost:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3244,7 +3247,7 @@ mod tests {
             "https://webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3290,7 +3293,7 @@ mod tests {
             "https://webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3334,7 +3337,7 @@ mod tests {
             "https://webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3376,7 +3379,7 @@ mod tests {
             "https://webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3419,7 +3422,7 @@ mod tests {
             "https://webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3467,7 +3470,7 @@ mod tests {
             "https://webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3514,7 +3517,7 @@ mod tests {
             "http://localhost:8080/auth",
             "localhost",
             vec![Url::parse("http://localhost:8080").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3634,7 +3637,7 @@ mod tests {
             "webauthn.io",
             "webauthn.io",
             vec![Url::parse("https://webauthn.io").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3694,7 +3697,7 @@ mod tests {
             "webauthn.io",
             "webauthn.io",
             vec![Url::parse("https://webauthn.io").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3753,7 +3756,7 @@ mod tests {
             "webauthn.org",
             "webauthn.org",
             vec![Url::parse("https://webauthn.org").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3822,7 +3825,7 @@ mod tests {
             "webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3889,7 +3892,7 @@ mod tests {
             "webauthn.firstyear.id.au",
             "webauthn.firstyear.id.au",
             vec![Url::parse("https://webauthn.firstyear.id.au").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
@@ -3943,7 +3946,7 @@ mod tests {
             "localhost",
             "localhost",
             vec![Url::parse("http://localhost:8080/").unwrap()],
-            None,
+            AUTHENTICATOR_TIMEOUT,
             None,
             None,
         );
