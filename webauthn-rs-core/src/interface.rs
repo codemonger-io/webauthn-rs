@@ -14,8 +14,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-// use openssl::hash::MessageDigest;
-// use openssl::x509;
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 use x509_cert::{
@@ -486,14 +484,12 @@ impl Into<SerialisableAttestationData> for ParsedAttestationData {
             ),
             ParsedAttestationData::Self_ => SerialisableAttestationData::Self_,
             ParsedAttestationData::AttCa(chain) => SerialisableAttestationData::AttCa(
-                // Base64UrlSafeData(c.to_der().expect("Invalid DER")),
                 chain
                     .into_iter()
                     .map(|c| Base64UrlSafeData(c.to_der().expect("Invalid DER")))
                     .collect(),
             ),
             ParsedAttestationData::AnonCa(chain) => SerialisableAttestationData::AnonCa(
-                // Base64UrlSafeData(c.to_der().expect("Invalid DER")),
                 chain
                     .into_iter()
                     .map(|c| Base64UrlSafeData(c.to_der().expect("Invalid DER")))
@@ -523,7 +519,6 @@ impl TryFrom<SerialisableAttestationData> for ParsedAttestationData {
             ),
             SerialisableAttestationData::Self_ => ParsedAttestationData::Self_,
             SerialisableAttestationData::AttCa(chain) => ParsedAttestationData::AttCa(
-                // x509::X509::from_der(&c.0).map_err(WebauthnError::OpenSSLError)?,
                 chain
                     .into_iter()
                     .map(|c| Certificate::from_der(&c.0)
@@ -534,7 +529,6 @@ impl TryFrom<SerialisableAttestationData> for ParsedAttestationData {
                     .collect::<WebauthnResult<_>>()?,
             ),
             SerialisableAttestationData::AnonCa(chain) => ParsedAttestationData::AnonCa(
-                // x509::X509::from_der(&c.0).map_err(WebauthnError::OpenSSLError)?,
                 chain
                     .into_iter()
                     .map(|c| Certificate::from_der(&c.0)
@@ -750,11 +744,6 @@ impl AttestationCa {
                 hasher.update(der.as_slice());
                 hasher.finalize().to_vec()
             })
-        /*
-        self.ca
-            .digest(MessageDigest::sha256())
-            .map_err(WebauthnError::OpenSSLError)
-            .map(|bytes| bytes.to_vec()) */
     }
 
     /// Update the set of aaguids this Attestation CA allows. If an empty btreeset is provided then

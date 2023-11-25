@@ -14,12 +14,6 @@ use crate::internals::*;
 use crate::proto::*;
 use base64urlsafedata::Base64UrlSafeData;
 use const_oid::db::rfc4519::COMMON_NAME;
-// use openssl::hash::MessageDigest;
-// use openssl::sha::sha256;
-// use openssl::stack;
-// use openssl::x509;
-// use openssl::x509::store;
-// use openssl::x509::verify;
 use sha2::{Sha256, Digest as _};
 use uuid::Uuid;
 use webpki::{KeyUsage, TrustAnchor};
@@ -431,35 +425,19 @@ pub(crate) fn verify_packed_attestation(
             let x5c_array_ref =
                 cbor_try_array!(x5c).map_err(|_| WebauthnError::AttestationStatementX5CInvalid)?;
 
-            /*
-            let arr_x509: Result<Vec<_>, _> = x5c_array_ref
-                .iter()
-                .map(|values| {
-                    cbor_try_bytes!(values)
-                        .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
-                        .and_then(|b| x509::X509::from_der(b).map_err(WebauthnError::OpenSSLError))
-                })
-                .collect();
-
-            let arr_x509 = arr_x509?; */
-
             let arr_x509 = x5c_array_ref
                 .iter()
                 .map(|values| {
                     cbor_try_bytes!(values)
                         .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
                         .and_then(|b| Certificate::from_der(b).map_err(|e| {
-                            error!("X509 error: {}", e);
-                            WebauthnError::TransientError("invalid X509 certificate")
+                            error!(?e, "decoding certificate DER");
+                            WebauthnError::TransientError("decoding certificate DER")
                         }))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
             // Must have at least one x509 cert, this is the leaf certificate.
-            /*
-            let attestn_cert = arr_x509
-                .get(0)
-                .ok_or(WebauthnError::AttestationStatementX5CInvalid)?; */
             let attestn_cert = arr_x509
                 .first()
                 .ok_or(WebauthnError::AttestationStatementX5CInvalid)?;
@@ -587,15 +565,6 @@ pub(crate) fn verify_fidou2f_attestation(
         return Err(WebauthnError::AttestationStatementX5CInvalid);
     }
 
-    /*
-    let _arr_x509 = att_cert_array
-        .iter()
-        .map(|att_cert_bytes| {
-            cbor_try_bytes!(att_cert_bytes).and_then(|att_cert| {
-                x509::X509::from_der(att_cert.as_slice()).map_err(WebauthnError::OpenSSLError)
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?; */
     let arr_x509 = att_cert_array
         .iter()
         .map(|att_cert_bytes| {
@@ -603,8 +572,8 @@ pub(crate) fn verify_fidou2f_attestation(
                 .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
                 .and_then(|b| Certificate::from_der(b)
                     .map_err(|e| {
-                        error!("failed to decode Certificate DER: {}", e);
-                        WebauthnError::TransientError("failed to encode Certificate DER")
+                        error!(?e, "decoding certificate DER: {}", e);
+                        WebauthnError::TransientError("decoding certificate DER")
                     }))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -746,18 +715,6 @@ pub(crate) fn verify_tpm_attestation(
     let x5c_array_ref =
         cbor_try_array!(x5c_value).map_err(|_| WebauthnError::AttestationStatementX5CInvalid)?;
 
-    /*
-    let arr_x509: Result<Vec<_>, _> = x5c_array_ref
-        .iter()
-        .map(|values| {
-            cbor_try_bytes!(values)
-                .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
-                .and_then(|b| x509::X509::from_der(b).map_err(WebauthnError::OpenSSLError))
-        })
-        .collect();
-
-    let arr_x509 = arr_x509?; */
-
     let arr_x509 = x5c_array_ref
         .iter()
         .map(|values| {
@@ -765,27 +722,13 @@ pub(crate) fn verify_tpm_attestation(
                 .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
                 .and_then(|b| Certificate::from_der(b)
                     .map_err(|e| {
-                        error!("failed to decode Certificate DER: {}", e);
-                        WebauthnError::TransientError("failed to decode Certificate DER")
+                        error!(?e, "decoding certificate DER");
+                        WebauthnError::TransientError("decoding certificate DER")
                     }))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // TODO: remove this
-    arr_x509
-        .iter()
-        .enumerate()
-        .for_each(|(i, cert)| {
-            use std::io::Write;
-            let mut out = std::fs::File::create(format!("cert-{}.der", i)).unwrap();
-            out.write_all(&cert.to_der().unwrap()).unwrap();
-        });
-
     // Must have at least one x509 cert
-    /*
-    let aik_cert = arr_x509
-        .get(0)
-        .ok_or(WebauthnError::AttestationStatementX5CInvalid)?; */
     let aik_cert = arr_x509
         .first()
         .ok_or(WebauthnError::AttestationStatementX5CInvalid)?;
@@ -975,19 +918,7 @@ pub(crate) fn verify_apple_anonymous_attestation(
     let credential_public_key = COSEKey::try_from(&acd.credential_pk)?;
     let alg = credential_public_key.type_;
 
-    /*
-    let arr_x509: Result<Vec<_>, _> = x5c_array_ref
-        .iter()
-        .map(|values| {
-            cbor_try_bytes!(values)
-                .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
-                .and_then(|b| x509::X509::from_der(b).map_err(WebauthnError::OpenSSLError))
-        })
-        .collect();
-
-    let arr_x509 = arr_x509?; */
-
-    let arr_x509_2 = x5c_array_ref
+    let arr_x509 = x5c_array_ref
         .iter()
         .map(|values| {
             cbor_try_bytes!(values)
@@ -1001,11 +932,7 @@ pub(crate) fn verify_apple_anonymous_attestation(
         .collect::<Result<Vec<_>, _>>()?;
 
     // Must have at least one cert
-    /*
     let attestn_cert = arr_x509
-        .first()
-        .ok_or(WebauthnError::AttestationStatementX5CInvalid)?; */
-    let attestn_cert_2 = arr_x509_2
         .first()
         .ok_or(WebauthnError::AttestationStatementX5CInvalid)?;
 
@@ -1021,10 +948,10 @@ pub(crate) fn verify_apple_anonymous_attestation(
 
     // 4. Verify that nonce equals the value of the extension with OID ( 1.2.840.113635.100.8.2 ) in credCert. The nonce here is used to prove that the attestation is live and to protect the integrity of the authenticatorData and the client data.
 
-    validate_extension::<AppleAnonymousNonce>(attestn_cert_2, &nonce)?;
+    validate_extension::<AppleAnonymousNonce>(attestn_cert, &nonce)?;
 
     // 5. Verify credential public key matches the Subject Public Key of credCert.
-    let subject_public_key = COSEKey::try_from((alg, attestn_cert_2))?;
+    let subject_public_key = COSEKey::try_from((alg, attestn_cert))?;
 
     if credential_public_key != subject_public_key {
         return Err(WebauthnError::AttestationCredentialSubjectKeyMismatch);
@@ -1032,7 +959,7 @@ pub(crate) fn verify_apple_anonymous_attestation(
 
     // 6. If successful, return implementation-specific values representing attestation type Anonymous CA and attestation trust path x5c.
     Ok((
-        ParsedAttestationData::AnonCa(arr_x509_2),
+        ParsedAttestationData::AnonCa(arr_x509),
         AttestationMetadata::None,
     ))
 }
@@ -1070,7 +997,7 @@ pub(crate) fn verify_android_key_attestation(
         cbor_try_bytes!(sig_value).map_err(|_| WebauthnError::AttestationStatementSigMissing)?
     };
 
-    let arr_x509_2 = {
+    let arr_x509 = {
         let x5c_key = &serde_cbor::Value::Text("x5c".to_string());
 
         let x5c_value = att_stmt_map
@@ -1080,17 +1007,7 @@ pub(crate) fn verify_android_key_attestation(
         let x5c_array_ref = cbor_try_array!(x5c_value)
             .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)?;
 
-        /*
-        let arr_x509: Result<Vec<_>, _> = x5c_array_ref
-            .iter()
-            .map(|values| {
-                cbor_try_bytes!(values)
-                    .map_err(|_| WebauthnError::AttestationStatementX5CInvalid)
-                    .and_then(|b| x509::X509::from_der(b).map_err(WebauthnError::OpenSSLError))
-            })
-            .collect(); */
-
-        let arr_x509_2 = x5c_array_ref
+        let arr_x509 = x5c_array_ref
             .iter()
             .map(|values| {
                 cbor_try_bytes!(values)
@@ -1103,15 +1020,11 @@ pub(crate) fn verify_android_key_attestation(
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        arr_x509_2
+        arr_x509
     };
 
     // Must have at least one cert
-    /*
     let attestn_cert = arr_x509
-        .first()
-        .ok_or(WebauthnError::AttestationStatementX5CInvalid)?; */
-    let attestn_cert_2 = arr_x509_2
         .first()
         .ok_or(WebauthnError::AttestationStatementX5CInvalid)?;
 
@@ -1124,7 +1037,7 @@ pub(crate) fn verify_android_key_attestation(
 
     // 2. Verify that sig is a valid signature over the concatenation of authenticatorData and clientDataHash using the public key in the first certificate in x5c with the algorithm specified in alg.
 
-    let verified = verify_signature(alg, attestn_cert_2, sig, &data_to_verify)?;
+    let verified = verify_signature(alg, attestn_cert, sig, &data_to_verify)?;
 
     if !verified {
         error!("signature verification failed!");
@@ -1133,7 +1046,7 @@ pub(crate) fn verify_android_key_attestation(
 
     // 3. Verify that the public key in the first certificate in x5c matches the credentialPublicKey in the attestedCredentialData in authenticatorData.
     let credential_public_key = COSEKey::try_from(&acd.credential_pk)?;
-    let subject_public_key = COSEKey::try_from((credential_public_key.type_, attestn_cert_2))?;
+    let subject_public_key = COSEKey::try_from((credential_public_key.type_, attestn_cert))?;
 
     if credential_public_key != subject_public_key {
         return Err(WebauthnError::AttestationCredentialSubjectKeyMismatch);
@@ -1147,7 +1060,7 @@ pub(crate) fn verify_android_key_attestation(
     // dbg!(std::str::from_utf8(&pem).unwrap());
 
     let meta = validate_extension::<AndroidKeyAttestationExtensionData>(
-        attestn_cert_2,
+        attestn_cert,
         &client_data_hash.to_vec(),
     )?;
 
@@ -1157,7 +1070,7 @@ pub(crate) fn verify_android_key_attestation(
     // });
 
     // 5. If successful, return implementation-specific values representing attestation type Anonymous CA and attestation trust path x5c.
-    Ok((ParsedAttestationData::Basic(arr_x509_2), meta))
+    Ok((ParsedAttestationData::Basic(arr_x509), meta))
 }
 
 /// https://www.w3.org/TR/webauthn/#sctn-android-safetynet-attestation
@@ -1234,9 +1147,6 @@ pub(crate) fn verify_android_safetynet_attestation(
 
         #[error("Base64 error: {0}")]
         Base64(#[from] base64::DecodeError),
-
-        // #[error("openssl")]
-        // OpenSSL(#[from] openssl::error::ErrorStack),
 
         #[error("nonce mismatch")]
         NonceMismatch,
@@ -1335,26 +1245,6 @@ pub(crate) fn verify_android_safetynet_attestation(
     };
 
     // 5. If successful, return implementation-specific values representing attestation type Anonymous CA and attestation trust path x5c.
-    /* let x5c = x5c.into_iter()
-        .map(|cert| cert.to_der()
-            .map_err(|e| {
-                error!(?e, "reconstructing x509::X509 in x5c");
-                WebauthnError::TransientError("failed to reproduce X509")
-            })
-            .and_then(|der| Certificate::from_der(&der)
-                .map_err(|e| {
-                    error!(?e, "reconstructing x509::X509 in x5c");
-                    WebauthnError::TransientError("failed to reproduce X509")
-                })))
-        .collect::<Result<Vec<_>, _>>()?; */
-    x5c.iter()
-        .enumerate()
-        .for_each(|(i, cert)| {
-            use std::io::Write;
-            let der = cert.to_der().unwrap();
-            let mut file = std::fs::File::create(format!("cert-{}.der", i)).unwrap();
-            file.write_all(&der).unwrap();
-        });
     Ok((ParsedAttestationData::Basic(x5c), metadata))
 }
 
@@ -1374,18 +1264,7 @@ pub fn verify_attestation_ca_chain<'a>(
     let fullchain = match att_data {
         ParsedAttestationData::Basic(chain) |
         ParsedAttestationData::AttCa(chain) |
-        ParsedAttestationData::AnonCa(chain) => chain.clone(),/*chain.iter()
-            .map(|cert| cert.to_der()
-                .map_err(|e| {
-                    error!(?e, "Certificate DER encoding");
-                    WebauthnError::TransientError("Certificate DER encoding")
-                })
-                .and_then(|der| x509::X509::from_der(&der)
-                    .map_err(|e| {
-                        error!(?e, "Certificate DER decoding");
-                        WebauthnError::TransientError("Certificate DER decoding")
-                    })))
-            .collect::<Result<Vec<_>, _>>()?, */
+        ParsedAttestationData::AnonCa(chain) => chain.clone(),
         ParsedAttestationData::Self_ | ParsedAttestationData::None => {
             // nothing to check
             return Ok(None);
@@ -1401,116 +1280,27 @@ pub fn verify_attestation_ca_chain<'a>(
     debug!(?ca_list);
 
     // reinterprets certificates
-    let fullchain_2 = fullchain;
-    /*
-    let fullchain_2 = fullchain
-        .iter()
-        .map(|cert| cert.to_der()
-            .map_err(|e| {
-                error!("failed to serialize certificate: {}", e);
-                WebauthnError::TransientError("failed to serialize certificate")
-            })
-            .and_then(|b| Certificate::from_der(&b)
-                .map_err(|e| {
-                    error!("faield to deserialize certificate: {}", e);
-                    WebauthnError::TransientError("failed to deserialize certificate")
-                })))
-        .collect::<Result<Vec<_>, _>>()?; */
-
-    /*
-    let (leaf, chain) = fullchain
-        .split_first()
-        .ok_or(WebauthnError::AttestationLeafCertMissing)?; */
-    let mut fullchain_2 = fullchain_2.into_iter();
-    let leaf_2 = fullchain_2.next()
+    let mut fullchain = fullchain.into_iter();
+    let leaf = fullchain.next()
         .ok_or(WebauthnError::AttestationLeafCertMissing)?;
-    let chain_2: Vec<_> = fullchain_2.collect();
-
-    /*
-    // Convert the chain to a stackref so that openssl can use it.
-    let mut chain_stack = stack::Stack::new().map_err(WebauthnError::OpenSSLError)?;
-
-    for crt in chain.iter() {
-        chain_stack
-            .push(crt.clone())
-            .map_err(WebauthnError::OpenSSLError)?;
-    }
-
-    // Create the x509 store that we will validate against.
-    let mut ca_store = store::X509StoreBuilder::new().map_err(WebauthnError::OpenSSLError)?;
-
-    // In tests we may need to allow disabling time window validity.
-    if danger_disable_certificate_time_checks {
-        ca_store
-            .set_flags(verify::X509VerifyFlags::NO_CHECK_TIME)
-            .map_err(WebauthnError::OpenSSLError)?;
-    }
-
-    for ca_crt in ca_list.cas.values() {
-        ca_store
-            .add_cert(ca_crt.ca.clone())
-            .map_err(WebauthnError::OpenSSLError)?;
-    }
-
-    // let ca_store = ca_store.build(); */
+    let chain: Vec<_> = fullchain.collect();
 
     let raw_ca_certs = ca_list.cas.values()
         .map(|ca_cert| ca_cert.ca.to_der()
             .map_err(|e| {
-                error!("failed to serialize CA certificate: {}", e);
-                WebauthnError::TransientError("failed to serialize CA certificate")
+                error!(?e, "serializing CA certificates");
+                WebauthnError::TransientError("serializing CA certificates")
             }))
         .collect::<Result<Vec<_>, _>>()?;
-    let ca_store_2 = raw_ca_certs.iter()
+    let ca_store = raw_ca_certs.iter()
         .map(|b| TrustAnchor::try_from_cert_der(&b)
             .map_err(|e| {
-                error!("failed to deserialize CA certificate: {}", e);
-                WebauthnError::TransientError("failed to deserialize CA certificate")
+                error!(?e, "deserializing CA certificates");
+                WebauthnError::TransientError("deserializing CA certificates")
             }))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // let mut ca_ctx = x509::X509StoreContext::new().map_err(WebauthnError::OpenSSLError)?;
-
     // Providing the cert and chain, validate we have a ref to our store.
-    // Note this is a result<result ... because the inner .init must return an errorstack
-    // for openssl.
-    /*
-    let res: Result<_, _> = ca_ctx
-        .init(&ca_store, leaf, &chain_stack, |ca_ctx_ref| {
-            ca_ctx_ref.verify_cert().map(|_| {
-                // The value as passed in is a boolean that we ignore in favour of the richer error type.
-                let res = ca_ctx_ref.error();
-                debug!("{:?}", res);
-                if res == x509::X509VerifyResult::OK {
-                    ca_ctx_ref
-                        .chain()
-                        .and_then(|chain| {
-                            // If there is a chain here, we get the root.
-                            let idx = chain.len() - 1;
-                            chain.get(idx)
-                        })
-                        .and_then(|ca_cert| {
-                            // If we got it from the stack, we can now digest it.
-                            ca_cert.digest(MessageDigest::sha256()).ok()
-                            // We let the digest bubble out now, we've done too much here
-                            // already!
-                        })
-                        .ok_or(WebauthnError::AttestationTrustFailure)
-                } else {
-                    debug!(
-                        "ca_ctx_ref verify cert - error depth={}, sn={:?}",
-                        ca_ctx_ref.error_depth(),
-                        ca_ctx_ref.current_cert().map(|crt| crt.subject_name())
-                    );
-                    Err(WebauthnError::AttestationChainNotTrusted(res.to_string()))
-                }
-            })
-        })
-        .map_err(|e| {
-            // If an openssl error occured, dump it here.
-            error!(?e);
-            e
-        })?; */
 
     let algorithms = &[
         &webpki::ECDSA_P256_SHA256,
@@ -1528,7 +1318,7 @@ pub fn verify_attestation_ca_chain<'a>(
     ];
     let validator = DefaultPathValidator::new(
         algorithms,
-        ca_store_2,
+        ca_store,
         key_usage.unwrap_or_else(KeyUsage::server_auth),
         &[],
         !danger_disable_certificate_time_checks,
@@ -1536,9 +1326,9 @@ pub fn verify_attestation_ca_chain<'a>(
     let mut search = X509PathFinder::new(X509PathFinderConfiguration {
         limit: std::time::Duration::default(),
         validator,
-        certificates: chain_2.into_iter().map(std::sync::Arc::new).collect(),
+        certificates: chain.into_iter().map(std::sync::Arc::new).collect(),
     });
-    let result = search.find_sync(std::sync::Arc::new(leaf_2))
+    let result = search.find_sync(std::sync::Arc::new(leaf))
         .map_err(|e| {
             error!("failed to validate certificate path: {}", e);
             WebauthnError::TransientError("failed to validate certificate path")
@@ -1561,42 +1351,19 @@ pub fn verify_attestation_ca_chain<'a>(
                 ),
             )
         })?;
-    let root = found.path.last()
-        .ok_or(WebauthnError::TransientError("failed to locate root certificate"))?;
-    error!("found: {}", root.tbs_certificate.subject.to_string());
-    let mut dgst_2 = Sha256::new();
-    dgst_2.update(found.trust_anchor.as_slice());
-    /*
-        root.to_der()
-            .map_err(|e| {
-                error!(?e, "serializing root CA to DER");
-                WebauthnError::TransientError("serializing root CA to DER")
-            })?
-            .as_slice(),
-    ); */
-    let dgst_2 = dgst_2.finalize();
+    let mut dgst = Sha256::new();
+    dgst.update(found.trust_anchor.as_slice());
+    let dgst = dgst.finalize();
 
     // Now we have a result<DigestOfCaUsed, Error> and we want to attach our related
     // attestation CA.
     ca_list
         .cas
-        .get(dgst_2.as_slice())
+        .get(dgst.as_slice())
         .ok_or_else(|| {
             WebauthnError::AttestationChainNotTrusted("Invalid CA digest maps".to_string())
         })
         // We need to wrap in an extra Some here to indicate to the caller that we
         // did use a CA compare to the Ok(None) case.
         .map(Some)
-    /*
-    res.and_then(|dgst| {
-        ca_list
-            .cas
-            .get(dgst.as_ref())
-            .ok_or_else(|| {
-                WebauthnError::AttestationChainNotTrusted("Invalid CA digest maps".to_string())
-            })
-            // We need to wrap in an extra Some here to indicate to the caller that we
-            // did use a CA compare to the Ok(None) case.
-            .map(Some)
-    }) */
 }
