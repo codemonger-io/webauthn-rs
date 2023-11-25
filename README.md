@@ -1,3 +1,8 @@
+&#x1F6A8;&#x1F6A8; **This fork is maintained by a [sole developer](https://github.com/kikuomax), neither verified nor validated independently.
+I highly recommend you use the [original version](https://github.com/kanidm/webauthn-rs).**
+This fork removes the dependency on OpenSSL and uses pure Rust cryptograhic libraries mostly provided by [Rust Crypto](https://github.com/RustCrypto).
+This change is opposing to the [original author's intention](./webauthn-rs-core/README.md#why-openssl).
+
 Webauthn-rs
 ==========
 
