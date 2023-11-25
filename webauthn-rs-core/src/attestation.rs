@@ -1296,7 +1296,7 @@ pub fn verify_attestation_ca_chain<'a>(
     let chain: Vec<_> = fullchain.collect();
 
     let raw_ca_certs = ca_list.cas.values()
-        .map(|ca_cert| ca_cert.ca.to_der()
+        .map(|ca_cert| ca_cert.ca().to_der()
             .map_err(|e| {
                 error!(?e, "serializing CA certificates");
                 WebauthnError::TransientError("serializing CA certificates")
