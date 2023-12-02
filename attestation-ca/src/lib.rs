@@ -12,7 +12,7 @@ use x509_cert::{
 
 use webauthn_rs_error::WebauthnError;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceDescription {
     pub(crate) en: String,
     pub(crate) localised: BTreeMap<String, String>,
@@ -37,13 +37,14 @@ impl DeviceDescription {
 pub struct SerialisableAttestationCa {
     pub(crate) ca: Base64UrlSafeData,
     pub(crate) aaguids: BTreeMap<Uuid, DeviceDescription>,
+    pub(crate) blanket_allow: bool,
 }
 
 /// A structure representing an Attestation CA and other options associated to this CA.
 ///
 /// Generally depending on the Attestation CA in use, this can help determine properties
 /// of the authenticator that is in use.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     try_from = "SerialisableAttestationCa",
     into = "SerialisableAttestationCa"
@@ -55,6 +56,7 @@ pub struct AttestationCa {
     /// attested as trusted by this CA. AAGUIDS that are not in this set, but signed by
     /// this CA will NOT be trusted.
     aaguids: BTreeMap<Uuid, DeviceDescription>,
+    blanket_allow: bool,
 }
 
 #[allow(clippy::from_over_into)]
@@ -63,6 +65,7 @@ impl Into<SerialisableAttestationCa> for AttestationCa {
         SerialisableAttestationCa {
             ca: Base64UrlSafeData(self.ca.to_der().expect("Invalid DER")),
             aaguids: self.aaguids,
+            blanket_allow: self.blanket_allow,
         }
     }
 }
@@ -78,6 +81,7 @@ impl TryFrom<SerialisableAttestationCa> for AttestationCa {
                     WebauthnError::TransientError("decoding AttestationCa from DER")
                 })?,
             aaguids: data.aaguids,
+            blanket_allow: data.blanket_allow,
         })
     }
 }
@@ -89,6 +93,10 @@ impl AttestationCa {
 
     pub fn aaguids(&self) -> &BTreeMap<Uuid, DeviceDescription> {
         &self.aaguids
+    }
+
+    pub fn blanket_allow(&self) -> bool {
+        self.blanket_allow
     }
 
     /// Retrieve the Key Identifier for this Attestation Ca
@@ -113,6 +121,7 @@ impl AttestationCa {
         desc_english: String,
         desc_localised: BTreeMap<String, String>,
     ) {
+        self.blanket_allow = false;
         self.aaguids.insert(
             aaguid,
             DeviceDescription {
@@ -129,15 +138,55 @@ impl AttestationCa {
                 WebauthnError::TransientError("decoding AttestationCa from PEM")
             })?,
             aaguids: BTreeMap::default(),
+            blanket_allow: true,
         })
+    }
+
+    fn union(&mut self, other: &Self) {
+        // if either is a blanket allow, we just do that.
+        if self.blanket_allow || other.blanket_allow {
+            self.blanket_allow = true;
+            self.aaguids.clear();
+            return;
+        } else {
+            self.blanket_allow = false;
+            for (o_aaguid, o_device) in other.aaguids.iter() {
+                // We can use the entry api here since o_aaguid is copy.
+                self.aaguids
+                    .entry(*o_aaguid)
+                    .or_insert_with(|| o_device.clone());
+            }
+        }
+    }
+
+    fn intersection(&mut self, other: &Self) {
+        // If they are a blanket allow, do nothing, we are already
+        // more restrictive, or we also are a blanket allow
+        if other.blanket_allow() {
+            // Do nothing
+            return;
+        } else if self.blanket_allow {
+            // Just set our aaguids to other, and remove our blanket allow.
+            self.blanket_allow = false;
+            self.aaguids = other.aaguids.clone();
+        } else {
+            // Only keep what is also in other.
+            self.aaguids
+                .retain(|s_aaguid, _| other.aaguids.contains_key(s_aaguid))
+        }
+    }
+
+    fn can_retain(&self) -> bool {
+        // Only retain a CA if it's a blanket allow, or has aaguids remaining.
+        self.blanket_allow || !self.aaguids.is_empty()
     }
 }
 
 /// A list of AttestationCas and associated options.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AttestationCaList {
     /// The set of CA's that we trust in this Operation
-    pub cas: BTreeMap<Base64UrlSafeData, AttestationCa>,
+    cas: BTreeMap<Base64UrlSafeData, AttestationCa>,
 }
 
 impl TryFrom<&[u8]> for AttestationCaList {
@@ -152,6 +201,18 @@ impl TryFrom<&[u8]> for AttestationCaList {
 }
 
 impl AttestationCaList {
+    pub fn cas(&self) -> &BTreeMap<Base64UrlSafeData, AttestationCa> {
+        &self.cas
+    }
+
+    pub fn clear(&mut self) {
+        self.cas.clear()
+    }
+
+    pub fn len(&self) -> usize {
+        self.cas.len()
+    }
+
     /// Determine if this attestation list contains any members.
     pub fn is_empty(&self) -> bool {
         self.cas.is_empty()
@@ -165,6 +226,38 @@ impl AttestationCaList {
         // Get the key id (kid, digest).
         let att_ca_dgst = att_ca.get_kid()?;
         Ok(self.cas.insert(att_ca_dgst.into(), att_ca))
+    }
+
+    /// Join two CA lists into one, taking all elements from both.
+    pub fn union(&mut self, other: &Self) {
+        for (o_kid, o_att_ca) in other.cas.iter() {
+            if let Some(s_att_ca) = self.cas.get_mut(o_kid) {
+                s_att_ca.union(o_att_ca)
+            } else {
+                self.cas.insert(o_kid.clone(), o_att_ca.clone());
+            }
+        }
+    }
+
+    /// Retain only the CA's and devices that exist in self and other.
+    pub fn intersection(&mut self, other: &Self) {
+        self.cas.retain(|s_kid, s_att_ca| {
+            // First, does this exist in our partner?
+            if let Some(o_att_ca) = other.cas.get(s_kid) {
+                // Now, intersect.
+                s_att_ca.intersection(o_att_ca);
+                if s_att_ca.can_retain() {
+                    // Still as elements, retain.
+                    true
+                } else {
+                    // Nothing remains, remove.
+                    false
+                }
+            } else {
+                // Not in other, remove.
+                false
+            }
+        })
     }
 }
 
@@ -203,6 +296,7 @@ impl AttestationCaListBuilder {
             AttestationCa {
                 ca,
                 aaguids: BTreeMap::default(),
+                blanket_allow: false,
             }
         };
 

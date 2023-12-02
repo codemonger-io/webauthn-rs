@@ -369,6 +369,16 @@ pub enum AttestationFormat {
     None,
 }
 
+impl AttestationFormat {
+    /// Only a small number of devices correctly report their transports. These are
+    /// limited to attested devices, and exclusively packed (fido2) and tpms. Most
+    /// other devices/browsers will get this wrong, meaning that authentication will
+    /// fail or not offer the correct transports to the user.
+    pub(crate) fn transports_valid(&self) -> bool {
+        matches!(self, AttestationFormat::Packed | AttestationFormat::Tpm)
+    }
+}
+
 impl TryFrom<&str> for AttestationFormat {
     type Error = WebauthnError;
 
@@ -1266,7 +1276,7 @@ pub fn verify_attestation_ca_chain<'a>(
     key_usage: Option<KeyUsage>,
 ) -> Result<Option<&'a AttestationCa>, WebauthnError> {
     // If the ca_list is empty, Immediately fail since no valid attestation can be created.
-    if ca_list.cas.is_empty() {
+    if ca_list.cas().is_empty() {
         return Err(WebauthnError::AttestationCertificateTrustStoreEmpty);
     }
 
@@ -1295,7 +1305,7 @@ pub fn verify_attestation_ca_chain<'a>(
         .ok_or(WebauthnError::AttestationLeafCertMissing)?;
     let chain: Vec<_> = fullchain.collect();
 
-    let raw_ca_certs = ca_list.cas.values()
+    let raw_ca_certs = ca_list.cas().values()
         .map(|ca_cert| ca_cert.ca().to_der()
             .map_err(|e| {
                 error!(?e, "serializing CA certificates");
@@ -1368,7 +1378,7 @@ pub fn verify_attestation_ca_chain<'a>(
     // Now we have a result<DigestOfCaUsed, Error> and we want to attach our related
     // attestation CA.
     ca_list
-        .cas
+        .cas()
         .get(dgst.as_slice())
         .ok_or_else(|| {
             WebauthnError::AttestationChainNotTrusted("Invalid CA digest maps".to_string())
