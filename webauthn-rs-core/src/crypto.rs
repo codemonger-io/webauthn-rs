@@ -6,6 +6,8 @@
 #![allow(non_camel_case_types)]
 
 use core::convert::TryFrom;
+use ed25519_dalek::{Verifier as _, VerifyingKey as Ed25519VerifyingKey};
+use ed448_verifier::VerifyingKey as Ed448VerifyingKey;
 use p256::{
     EncodedPoint,
     ecdsa::{
@@ -44,8 +46,13 @@ use x509_parser::prelude::{X509Error, X509Name};
 enum PublicKey {
     ES256(P256VerifyingKey),
     RS256(RsaVerifyingKey<Sha256>),
+    ED25519(Ed25519VerifyingKey),
+    ED448(Ed448VerifyingKey),
     INSECURE_RS1(&'static str),
 }
+
+pub(crate) const PKEY_ALGORITHM_ID_ED25519_OID: &[u8] = &der_parser::oid!(raw 1.3.101 .112);
+pub(crate) const PKEY_ALGORITHM_ID_ED448_OID: &[u8] = &der_parser::oid!(raw 1.3.101 .113);
 
 impl TryFrom<(COSEAlgorithm, &Certificate)> for PublicKey {
     type Error = WebauthnError;
@@ -72,6 +79,38 @@ impl TryFrom<(COSEAlgorithm, &Certificate)> for PublicKey {
                     })
                     .map(PublicKey::RS256)
             }
+            COSEAlgorithm::EDDSA => {
+                // determines the actual curve from the algorithm identifier
+                // in the certificate. reference: RFC 8410, section 3
+                // https://datatracker.ietf.org/doc/html/rfc8410#section-3
+                //
+                // TODO: according to the COSEAlgorithmIdentifier definition
+                // at https://w3c.github.io/webauthn/#sctn-alg-identifier,
+                // the algorithm must be ed25519 in this context. do we really
+                // have to check the actual curve here?
+                let key_octets = pkey_info.subject_public_key.raw_bytes();
+                match pkey_info.algorithm.oid.as_bytes() {
+                    PKEY_ALGORITHM_ID_ED25519_OID => {
+                        Ed25519VerifyingKey::try_from(key_octets)
+                            .map_err(|e| {
+                                error!(?e, "ed25519 public key from certificate");
+                                WebauthnError::TransientError("ed25519 public key from certificate")
+                            })
+                            .map(PublicKey::ED25519)
+                    }
+                    PKEY_ALGORITHM_ID_ED448_OID => {
+                        Ed448VerifyingKey::try_from(key_octets)
+                            .map_err(|e| {
+                                error!(?e, "ed448 public key from certificate");
+                                WebauthnError::TransientError("ed448 public key from certificate")
+                            })
+                            .map(PublicKey::ED448)
+                    }
+                    _ => {
+                        Err(WebauthnError::TransientError("unsupported EDDSA algorithm"))
+                    }
+                }
+            }
             COSEAlgorithm::INSECURE_RS1 => {
                 Ok(PublicKey::INSECURE_RS1("INSECURE SHA1"))
             },
@@ -79,6 +118,7 @@ impl TryFrom<(COSEAlgorithm, &Certificate)> for PublicKey {
                 error!(
                     "unsupported signature algorithm: {:?}",
                     cert.signature_algorithm.oid,
+                    // FIXME: should this be pkey_info.algorithm.oid?
                 );
                 Err(WebauthnError::TransientError("unsupported signature algorithm"))
             }
@@ -103,6 +143,26 @@ impl TryFrom<&COSEKey> for PublicKey {
                         WebauthnError::TransientError("ES256 public key from COSEKey")
                     })?;
                 Ok(PublicKey::ES256(pkey))
+            }
+            COSEKeyType::EC_OKP(edk) => {
+                match edk.curve {
+                    EDDSACurve::ED25519 => {
+                        Ed25519VerifyingKey::try_from(edk.x.0.as_slice())
+                            .map_err(|e| {
+                                error!(?e, "ed25519 public key from COSEKey");
+                                WebauthnError::TransientError("ed25519 public key from COSEKey")
+                            })
+                            .map(PublicKey::ED25519)
+                    }
+                    EDDSACurve::ED448 => {
+                        Ed448VerifyingKey::try_from(edk.x.0.as_slice())
+                            .map_err(|e| {
+                                error!(?e, "ed448 public key from COSEKey");
+                                WebauthnError::TransientError("ed448 public key from COSEKey")
+                            })
+                            .map(PublicKey::ED448)
+                    }
+                }
             }
             COSEKeyType::RSA(rsak) => {
                 let n = BigUint::from_bytes_be(rsak.n.as_ref());
@@ -135,9 +195,6 @@ impl TryFrom<&COSEKey> for PublicKey {
                     }
                 }
             }
-            _ => {
-                Err(WebauthnError::COSEKeyInvalidType)
-            }
         }
     }
 }
@@ -168,6 +225,24 @@ fn pkey_verify_signature(
             let mut digest = Sha256::new();
             digest.update(verification_data);
             let result = pkey.verify_digest(digest, &signature);
+            Ok(result.is_ok())
+        }
+        PublicKey::ED25519(pkey) => {
+            let signature = ed25519_dalek::Signature::try_from(signature)
+                .map_err(|e| {
+                    error!(?e, "ed25519 signature decoding");
+                    WebauthnError::TransientError("ed25519 signature decoding")
+                })?;
+            let result = pkey.verify(verification_data, &signature);
+            Ok(result.is_ok())
+        }
+        PublicKey::ED448(pkey) => {
+            let signature = ed448_verifier::Signature::try_from(signature)
+                .map_err(|e| {
+                    error!(?e, "ed448 signature decoding");
+                    WebauthnError::TransientError("ed448 signature decoding")
+                })?;
+            let result = pkey.verify(verification_data, &signature);
             Ok(result.is_ok())
         }
         PublicKey::INSECURE_RS1(_pkey) => {
@@ -453,13 +528,13 @@ impl TryFrom<&serde_cbor_2::Value> for COSEKey {
             // return it
             Ok(cose_key)
         } else if key_type == (COSEKeyTypeId::EC_OKP as i128) && (type_ == COSEAlgorithm::EDDSA) {
-            debug!(?d, "WebauthnError::COSEKeyInvalidType - EC_OKP");
             // https://datatracker.ietf.org/doc/html/rfc8152#section-13.2
 
             let curve_type_value = m
                 .get(&serde_cbor_2::Value::Integer(-1))
                 .ok_or(WebauthnError::COSEKeyInvalidCBORValue)?;
-            let curve_type = cbor_try_i128!(curve_type_value)?;
+            let curve = cbor_try_i128!(curve_type_value).and_then(EDDSACurve::try_from)?;
+
             /*
                 // Some keys may return this as a string rather than int.
                 // The only key so far is the solokey and it's ed25519 support
@@ -482,18 +557,15 @@ impl TryFrom<&serde_cbor_2::Value> for COSEKey {
                 .ok_or(WebauthnError::COSEKeyInvalidCBORValue)?;
             let x = cbor_try_bytes!(x_value)?;
 
-            if x.len() != 32 {
+            if x.len() != curve.coordinate_size() {
                 return Err(WebauthnError::COSEKeyEDDSAXInvalid);
             }
-
-            let mut x_temp = [0; 32];
-            x_temp.copy_from_slice(x);
 
             let cose_key = COSEKey {
                 type_,
                 key: COSEKeyType::EC_OKP(COSEOKPKey {
-                    curve: EDDSACurve::try_from(curve_type)?,
-                    x: x_temp,
+                    curve,
+                    x: x.to_vec().into(),
                 }),
             };
 
@@ -501,7 +573,6 @@ impl TryFrom<&serde_cbor_2::Value> for COSEKey {
             //   "   Applications MUST check that the curve and the key type are
             //     consistent and reject a key if they are not."
             // this means feeding the values to openssl to validate them for us!
-
             cose_key.validate()?;
             // return it
             Ok(cose_key)
@@ -635,6 +706,26 @@ impl COSEKey {
                     ECDSACurve::SECP521R1 => validate_ec_key!(p521),
                 }
             }
+            COSEKeyType::EC_OKP(edk) => {
+                match edk.curve {
+                    EDDSACurve::ED25519 => {
+                        Ed25519VerifyingKey::try_from(edk.x.0.as_slice())
+                            .map_err(|e| {
+                                error!(?e, "validating ed25519 public key");
+                                WebauthnError::TransientError("validating ed25519 public key")
+                            })?;
+                        Ok(())
+                    }
+                    EDDSACurve::ED448 => {
+                        Ed448VerifyingKey::try_from(edk.x.0.as_slice())
+                            .map_err(|e| {
+                                error!(?e, "validating ed448 public key");
+                                WebauthnError::TransientError("validating ed448 public key")
+                            })?;
+                        Ok(())
+                    }
+                }
+            }
             COSEKeyType::RSA(rsak) => {
                 let n = BigUint::from_bytes_be(rsak.n.as_ref());
                 let e = BigUint::from_bytes_be(rsak.e.as_ref());
@@ -644,10 +735,6 @@ impl COSEKey {
                         WebauthnError::TransientError("verifying RSA public key")
                     })?;
                 Ok(())
-            }
-            COSEKeyType::EC_OKP(_edk) => {
-                warn!("ED25519 or ED448 keys are not currently supported");
-                Err(WebauthnError::COSEKeyEDUnsupported)
             }
         }
     }
@@ -692,9 +779,14 @@ impl COSEKey {
                 let p = pkey::PKey::from_rsa(rsa_key).map_err(WebauthnError::OpenSSLError)?;
                 Ok(p)
             }
-            _ => {
-                debug!("get_openssl_pkey");
-                Err(WebauthnError::COSEKeyInvalidType)
+            COSEKeyType::EC_OKP(edk) => {
+                let id = match &edk.curve {
+                    EDDSACurve::ED25519 => pkey::Id::ED25519,
+                    EDDSACurve::ED448 => pkey::Id::ED448,
+                };
+
+                pkey::PKey::public_key_from_raw_bytes(&edk.x.0, id)
+                    .map_err(WebauthnError::OpenSSLError)
             }
         }
     }
@@ -836,5 +928,57 @@ mod tests {
             }
             _ => panic!("Key should be parsed EC2 key"),
         }
+    }
+
+    #[test]
+    fn cbor_ed25519() {
+        let hex_data = hex!(
+            "
+                A4         // Map - 4 elements
+                01 01      //   1:   1,  ; kty: OKP key type
+                03 27      //   3:  -8,  ; alg: EDDSA signature algorithm
+                20 06      //  -1:   6,  ; crv: Ed25519 curve
+                21 58 20   43565027f918beb00257d112b903d15b93f5cbc7562dfc8458fbefd714546e3c // -2:   x,  ; Y-coordinate");
+        let val: Value = serde_cbor_2::from_slice(&hex_data).unwrap();
+        let key = COSEKey::try_from(&val).unwrap();
+        assert_eq!(key.type_, COSEAlgorithm::EDDSA);
+        match &key.key {
+            COSEKeyType::EC_OKP(pkey) => {
+                assert_eq!(
+                    pkey.x.as_ref(),
+                    hex!("43565027f918beb00257d112b903d15b93f5cbc7562dfc8458fbefd714546e3c")
+                );
+                assert_eq!(pkey.curve, EDDSACurve::ED25519);
+            }
+            _ => panic!("Key should be parsed OKP key"),
+        }
+
+        assert!(PublicKey::try_from(&key).is_ok());
+    }
+
+    #[test]
+    fn cbor_ed448() {
+        let hex_data = hex!(
+            "
+                A4         // Map - 4 elements
+                01 01      //   1:   1,  ; kty: OKP key type
+                03 27      //   3:  -8,  ; alg: EDDSA signature algorithm
+                20 07      //  -1:   7,  ; crv: Ed448 curve
+                21 58 39   0c04658f79c3fd86c4b3d676057b76353126e9b905a7e204c07846c1a2ab3791b02fc5e9c6930345ea7bf8524b944220d4bd711c010c9b2a80 // -2:   x,  ; Y-coordinate");
+        let val: Value = serde_cbor_2::from_slice(&hex_data).unwrap();
+        let key = COSEKey::try_from(&val).unwrap();
+        assert_eq!(key.type_, COSEAlgorithm::EDDSA);
+        match &key.key {
+            COSEKeyType::EC_OKP(pkey) => {
+                assert_eq!(
+                    pkey.x.as_ref(),
+                    hex!("0c04658f79c3fd86c4b3d676057b76353126e9b905a7e204c07846c1a2ab3791b02fc5e9c6930345ea7bf8524b944220d4bd711c010c9b2a80")
+                );
+                assert_eq!(pkey.curve, EDDSACurve::ED448);
+            }
+            _ => panic!("Key should be parsed OKP key"),
+        }
+
+        assert!(PublicKey::try_from(&key).is_ok());
     }
 }

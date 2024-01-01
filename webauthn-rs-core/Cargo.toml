@@ -46,6 +46,8 @@ x509-path-finder = { git = "https://github.com/codemonger-io/x509-path-finder.gi
 rustls-webpki = { git = "https://github.com/codemonger-io/webpki.git", tag = "v0.101.7-ext.1" }
 const-oid = { version = "0.9", features = ["db"] }
 rsa = "0.9"
+ed25519-dalek = "2.1"
+ed448-verifier = { git = "https://github.com/codemonger-io/ed448-verifier.git", tag = "v0.0.1" }
 
 [dev-dependencies]
 hex-literal = "0.3"
