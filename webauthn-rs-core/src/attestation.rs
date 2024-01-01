@@ -1373,7 +1373,7 @@ pub(crate) fn verify_android_safetynet_attestation(
                 .get_x5c_chain()?
                 .ok_or(SafetyNetError::MissingCertChain)?;
 
-            let leaf_cert = certs.get(0).ok_or(SafetyNetError::BadCert)?;
+            let leaf_cert = certs.first().ok_or(SafetyNetError::BadCert)?;
 
             // Verify with the internal certificate.
             let jws: compact_jwt_wo_openssl::Jws<SafteyNetAttestResponse> = jwsu.validate_embeded()?;
