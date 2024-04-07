@@ -2,16 +2,12 @@
 //! This contains a transparent type allowing callbacks to
 //! make attestation decisions.
 
-use std::convert::TryFrom;
-
 use crate::crypto::{
     check_extension, compute_sha256, only_hash_from_type, verify_signature, TpmSanData,
 };
 use crate::error::WebauthnError;
 use crate::internals::*;
-use crate::internals::{tpm_device_attribute_parser, TpmVendor};
 use crate::proto::*;
-use base64urlsafedata::Base64UrlSafeData;
 use const_oid::db::rfc4519::COMMON_NAME;
 use sha2::{Sha256, Digest as _};
 use uuid::Uuid;

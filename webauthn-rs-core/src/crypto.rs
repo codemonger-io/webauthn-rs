@@ -5,7 +5,6 @@
 
 #![allow(non_camel_case_types)]
 
-use core::convert::TryFrom;
 use ed25519_dalek::{Verifier as _, VerifyingKey as Ed25519VerifyingKey};
 use ed448_verifier::VerifyingKey as Ed448VerifyingKey;
 use p256::{
