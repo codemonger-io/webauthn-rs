@@ -63,7 +63,7 @@ pub struct AttestationCa {
 impl Into<SerialisableAttestationCa> for AttestationCa {
     fn into(self) -> SerialisableAttestationCa {
         SerialisableAttestationCa {
-            ca: Base64UrlSafeData(self.ca.to_der().expect("Invalid DER")),
+            ca: Base64UrlSafeData::from(self.ca.to_der().expect("Invalid DER")),
             aaguids: self.aaguids,
             blanket_allow: self.blanket_allow,
         }
@@ -75,7 +75,7 @@ impl TryFrom<SerialisableAttestationCa> for AttestationCa {
 
     fn try_from(data: SerialisableAttestationCa) -> Result<Self, Self::Error> {
         Ok(AttestationCa {
-            ca: Certificate::from_der(&data.ca.0)
+            ca: Certificate::from_der(data.ca.as_slice())
                 .map_err(|e| {
                     error!(?e, "decoding AttestationCa from DER");
                     WebauthnError::TransientError("decoding AttestationCa from DER")

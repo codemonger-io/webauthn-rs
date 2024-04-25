@@ -146,7 +146,7 @@ impl TryFrom<&COSEKey> for PublicKey {
             COSEKeyType::EC_OKP(edk) => {
                 match edk.curve {
                     EDDSACurve::ED25519 => {
-                        Ed25519VerifyingKey::try_from(edk.x.0.as_slice())
+                        Ed25519VerifyingKey::try_from(edk.x.as_slice())
                             .map_err(|e| {
                                 error!(?e, "ed25519 public key from COSEKey");
                                 WebauthnError::TransientError("ed25519 public key from COSEKey")
@@ -154,7 +154,7 @@ impl TryFrom<&COSEKey> for PublicKey {
                             .map(PublicKey::ED25519)
                     }
                     EDDSACurve::ED448 => {
-                        Ed448VerifyingKey::try_from(edk.x.0.as_slice())
+                        Ed448VerifyingKey::try_from(edk.x.as_slice())
                             .map_err(|e| {
                                 error!(?e, "ed448 public key from COSEKey");
                                 WebauthnError::TransientError("ed448 public key from COSEKey")
@@ -666,8 +666,8 @@ impl COSEKey {
             COSEKeyType::EC_EC2(ecpk) => {
                 let r: [u8; 1] = [0x04];
                 Ok(r.iter()
-                    .chain(ecpk.x.0.iter())
-                    .chain(ecpk.y.0.iter())
+                    .chain(ecpk.x.iter())
+                    .chain(ecpk.y.iter())
                     .copied()
                     .collect())
             }
@@ -708,7 +708,7 @@ impl COSEKey {
             COSEKeyType::EC_OKP(edk) => {
                 match edk.curve {
                     EDDSACurve::ED25519 => {
-                        Ed25519VerifyingKey::try_from(edk.x.0.as_slice())
+                        Ed25519VerifyingKey::try_from(edk.x.as_slice())
                             .map_err(|e| {
                                 error!(?e, "validating ed25519 public key");
                                 WebauthnError::TransientError("validating ed25519 public key")
@@ -716,7 +716,7 @@ impl COSEKey {
                         Ok(())
                     }
                     EDDSACurve::ED448 => {
-                        Ed448VerifyingKey::try_from(edk.x.0.as_slice())
+                        Ed448VerifyingKey::try_from(edk.x.as_slice())
                             .map_err(|e| {
                                 error!(?e, "validating ed448 public key");
                                 WebauthnError::TransientError("validating ed448 public key")
@@ -784,7 +784,7 @@ impl COSEKey {
                     EDDSACurve::ED448 => pkey::Id::ED448,
                 };
 
-                pkey::PKey::public_key_from_raw_bytes(&edk.x.0, id)
+                pkey::PKey::public_key_from_raw_bytes(edk.x.as_ref(), id)
                     .map_err(WebauthnError::OpenSSLError)
             }
         }
