@@ -1,7 +1,17 @@
 &#x1F6A8;&#x1F6A8; **This fork is maintained by a [sole developer](https://github.com/kikuomax), neither verified nor validated independently.
-I highly recommend you use the [original version](https://github.com/kanidm/webauthn-rs).**
+I highly recommend you using the [original version](https://github.com/kanidm/webauthn-rs).**
 This fork removes the dependency on OpenSSL and uses pure Rust cryptograhic libraries mostly provided by [Rust Crypto](https://github.com/RustCrypto).
 This change is opposing to the [original author's intention](./webauthn-rs-core/README.md#why-openssl).
+Please also note that only the following folders have been maintained so far:
+- [`webauthn-rs`](./webauthn-rs)
+- [`webauthn-rs-core`](./webauthn-rs-core)
+- [`webauthn-proto-rs`](./webauthn-rs-proto): no OpenSSL dependency
+- [`attestation-ca`](./attestation-ca)
+- [`device-catalog`](./device-catalog)
+- [`webauthn-rs-error`](./webauthn-rs-error): newly introduced in this fork
+
+I will occasionally cherry-pick the [upstream](https://github.com/kanidm/webauthn-rs) commits to this fork.
+You can see the history of cherry-picking in [`cherry-picking-history.md`](./cherry-picking-history.md).
 
 Webauthn-rs
 ==========
